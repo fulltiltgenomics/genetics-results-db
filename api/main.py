@@ -1,0 +1,246 @@
+"""
+Genetics Results API - BigQuery query service for AI agents.
+Provides SQL query interface to genetics fine-mapping and colocalization data.
+"""
+
+import os
+import logging
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from google.cloud import bigquery
+from google.api_core.exceptions import BadRequest, Forbidden
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="Genetics Results API",
+    description="Query interface for genetics fine-mapping and colocalization data",
+    version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+PROJECT_ID = os.environ.get("PROJECT_ID", "google-project-id")
+DATASET_ID = os.environ.get("DATASET_ID", "genetics_results")
+MAX_ROWS = int(os.environ.get("MAX_ROWS", "10000"))
+MAX_BYTES_BILLED = int(os.environ.get("MAX_BYTES_BILLED", str(100 * 1024**3)))  # 100 GB default
+
+bq_client = bigquery.Client(project=PROJECT_ID)
+
+
+class QueryRequest(BaseModel):
+    """SQL query request."""
+
+    sql: str = Field(..., description="SQL query to execute", min_length=1)
+    max_rows: int = Field(default=1000, le=MAX_ROWS, description="Maximum rows to return")
+    dry_run: bool = Field(default=False, description="Estimate query cost without executing")
+
+
+class QueryResponse(BaseModel):
+    """Query result response."""
+
+    columns: list[str]
+    rows: list[list[Any]]
+    total_rows: int
+    bytes_processed: int
+    truncated: bool
+
+
+class TableInfo(BaseModel):
+    """Table metadata."""
+
+    name: str
+    description: str
+    row_count: int
+    columns: list[dict[str, str]]
+
+
+class SchemaResponse(BaseModel):
+    """Database schema response."""
+
+    tables: list[TableInfo]
+
+
+def sanitize_query(sql: str) -> str:
+    """Basic query sanitization - ensure read-only operations."""
+    sql_upper = sql.upper().strip()
+
+    # block write operations
+    forbidden = ["INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"]
+    for keyword in forbidden:
+        if keyword in sql_upper.split():
+            raise HTTPException(status_code=400, detail=f"Write operations not allowed: {keyword}")
+
+    return sql
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy"}
+
+
+@app.get("/schema", response_model=SchemaResponse)
+async def get_schema():
+    """Get database schema information."""
+    tables = []
+
+    for table_name in ["credible_sets", "colocalization", "coloc_credsets", "exome_variant_results", "gene_burden_results"]:
+        table_ref = f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
+        try:
+            table = bq_client.get_table(table_ref)
+            columns = [
+                {
+                    "name": field.name,
+                    "type": field.field_type,
+                    "mode": field.mode,
+                    "description": field.description or "",
+                }
+                for field in table.schema
+            ]
+            tables.append(
+                TableInfo(
+                    name=table_name,
+                    description=table.description or "",
+                    row_count=table.num_rows,
+                    columns=columns,
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Could not get schema for {table_name}: {e}")
+
+    return SchemaResponse(tables=tables)
+
+
+@app.post("/query", response_model=QueryResponse)
+async def execute_query(request: QueryRequest):
+    """Execute a SQL query against the genetics database."""
+    sql = sanitize_query(request.sql)
+
+    # auto-qualify table names if not fully qualified
+    for table in ["credible_sets", "colocalization", "coloc_credsets", "exome_variant_results", "gene_burden_results"]:
+        # replace unqualified table names with fully qualified
+        sql = sql.replace(f" {table}", f" `{PROJECT_ID}.{DATASET_ID}.{table}`")
+        sql = sql.replace(f"FROM {table}", f"FROM `{PROJECT_ID}.{DATASET_ID}.{table}`")
+        sql = sql.replace(f"JOIN {table}", f"JOIN `{PROJECT_ID}.{DATASET_ID}.{table}`")
+
+    job_config = bigquery.QueryJobConfig(
+        maximum_bytes_billed=MAX_BYTES_BILLED,
+        dry_run=request.dry_run,
+    )
+
+    try:
+        query_job = bq_client.query(sql, job_config=job_config)
+
+        if request.dry_run:
+            return QueryResponse(
+                columns=[],
+                rows=[],
+                total_rows=0,
+                bytes_processed=query_job.total_bytes_processed,
+                truncated=False,
+            )
+
+        results = query_job.result()
+        rows = []
+        columns = [field.name for field in results.schema]
+
+        for i, row in enumerate(results):
+            if i >= request.max_rows:
+                break
+            rows.append([_serialize_value(v) for v in row.values()])
+
+        return QueryResponse(
+            columns=columns,
+            rows=rows,
+            total_rows=results.total_rows,
+            bytes_processed=query_job.total_bytes_processed,
+            truncated=results.total_rows > request.max_rows,
+        )
+
+    except BadRequest as e:
+        raise HTTPException(status_code=400, detail=f"Invalid query: {e.message}")
+    except Forbidden as e:
+        raise HTTPException(status_code=403, detail=f"Query forbidden: {e.message}")
+    except Exception as e:
+        logger.exception("Query execution failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _serialize_value(value: Any) -> Any:
+    """Serialize BigQuery values to JSON-compatible types."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float, str, bool)):
+        return value
+    return str(value)
+
+
+@app.get("/tables/{table_name}/sample")
+async def get_sample(table_name: str, limit: int = 10):
+    """Get sample rows from a table."""
+    if table_name not in ["credible_sets", "colocalization", "coloc_credsets", "exome_variant_results", "gene_burden_results"]:
+        raise HTTPException(status_code=404, detail=f"Table not found: {table_name}")
+
+    limit = min(limit, 100)
+    sql = f"SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}` LIMIT {limit}"
+
+    query_job = bq_client.query(sql)
+    results = query_job.result()
+
+    columns = [field.name for field in results.schema]
+    rows = [[_serialize_value(v) for v in row.values()] for row in results]
+
+    return {"columns": columns, "rows": rows}
+
+
+@app.get("/stats")
+async def get_stats():
+    """Get summary statistics for the database."""
+    stats = {}
+
+    # row counts
+    for table in ["credible_sets", "colocalization", "coloc_credsets", "exome_variant_results", "gene_burden_results"]:
+        try:
+            table_ref = f"{PROJECT_ID}.{DATASET_ID}.{table}"
+            table_info = bq_client.get_table(table_ref)
+            stats[f"{table}_rows"] = table_info.num_rows
+        except Exception:
+            stats[f"{table}_rows"] = None
+
+    # credible sets breakdown
+    try:
+        sql = f"""
+        SELECT
+            dataset,
+            data_type,
+            COUNT(*) as count
+        FROM `{PROJECT_ID}.{DATASET_ID}.credible_sets`
+        GROUP BY dataset, data_type
+        ORDER BY count DESC
+        """
+        results = bq_client.query(sql).result()
+        stats["credible_sets_by_source"] = [
+            {"dataset": row.dataset, "data_type": row.data_type, "count": row.count}
+            for row in results
+        ]
+    except Exception as e:
+        logger.warning(f"Could not get credible sets breakdown: {e}")
+
+    return stats
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))

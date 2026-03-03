@@ -1,0 +1,43 @@
+steps:
+  # build container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/genetics-results-api:$COMMIT_SHA', '.']
+
+  # push to container registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/genetics-results-api:$COMMIT_SHA']
+
+  # deploy to cloud run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'genetics-results-api'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/genetics-results-api:$COMMIT_SHA'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'PROJECT_ID=$PROJECT_ID,DATASET_ID=${_DATASET_ID}'
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+      - '--timeout'
+      - '300'
+      - '--max-instances'
+      - '10'
+
+substitutions:
+  _REGION: europe-west1
+  _DATASET_ID: genetics_results
+
+images:
+  - 'gcr.io/$PROJECT_ID/genetics-results-api:$COMMIT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
