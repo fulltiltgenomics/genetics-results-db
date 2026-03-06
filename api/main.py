@@ -3,8 +3,11 @@ Genetics Results API - BigQuery query service for AI agents.
 Provides SQL query interface to genetics fine-mapping and colocalization data.
 """
 
+import json
 import os
 import logging
+import sys
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -13,7 +16,35 @@ from pydantic import BaseModel, Field
 from google.cloud import bigquery
 from google.api_core.exceptions import BadRequest, Forbidden
 
-logging.basicConfig(level=logging.INFO)
+
+class _GCPJsonFormatter(logging.Formatter):
+    """JSON formatter compatible with GCP Cloud Logging."""
+
+    SEVERITY_MAP = {
+        logging.DEBUG: "DEBUG",
+        logging.INFO: "INFO",
+        logging.WARNING: "WARNING",
+        logging.ERROR: "ERROR",
+        logging.CRITICAL: "CRITICAL",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "severity": self.SEVERITY_MAP.get(record.levelno, "DEFAULT"),
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
+
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(_GCPJsonFormatter())
+logging.root.handlers = [_handler]
+logging.root.setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
