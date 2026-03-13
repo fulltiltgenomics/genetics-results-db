@@ -4,7 +4,7 @@ BigQuery database for genetics fine-mapping, colocalization, and exome sequencin
 
 This is deployed as part of FinnGenie AI assistant (see [https://github.com/fulltiltgenomics/genetics-results-suite](https://github.com/fulltiltgenomics/genetics-results-suite)).
 
-Cannot yet be used without access to restricted data.
+Cannot yet be used as is without access to restricted data.
 
 ## Loading data to BigQuery
 
@@ -25,9 +25,7 @@ pip install -r api/requirements.txt
 Requires Google Cloud credentials configured.
 
 ```bash
-python api/main.py
-# overriding vars
-PROJECT_ID=my-project DATASET_ID=genetics_results PORT=8080 python api/main.py
+PROJECT_ID=my-google-project DATASET_ID=genetics_results PORT=8080 python api/main.py
 ```
 
 ## API endpoints
@@ -62,7 +60,7 @@ curl -X POST http://localhost:8080/query \
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PROJECT_ID` | phewas-development | GCP project ID |
+| `PROJECT_ID` | project-id | GCP project ID |
 | `DATASET_ID` | genetics_results | BigQuery dataset name |
 | `MAX_ROWS` | 10000 | Max rows returned per query |
 | `MAX_BYTES_BILLED` | 107374182400 | Max bytes billed per query |
@@ -75,3 +73,8 @@ curl -X POST http://localhost:8080/query \
 - **coloc_credsets** — variants in colocalized credible sets
 - **exome_variant_results** — exome variant associations (Genebass)
 - **gene_burden_results** — gene burden test results (Genebass)
+
+## License
+
+MIT
+
