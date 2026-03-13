@@ -19,7 +19,7 @@ genetics-results-db is a BigQuery-based database solution for storing and queryi
 - Query sanitization to prevent write operations (though read-only access is recommended in any case)
 - Cost controls via configurable bytes-billed limits and dry-run support
 - Direct loading of tsv.gz files from GCS with schema validation
-- Auto-qualification of table names in queries for simpler SQL
+- Auto-qualification of table names in queries for simpler SQL (base table names are redirected to views)
 
 ## Architecture
 
@@ -28,12 +28,17 @@ GCS (tsv.gz files)
       ↓ (one-time load via bq load)
 BigQuery Dataset
   ├── credible_sets (partitioned by chr, clustered by dataset, data_type, most_severe)
+  │   └── credible_sets_v (view: adds variant, resource columns)
   ├── colocalization (partitioned by chr, clustered by dataset pairs)
+  │   └── colocalization_v (view: adds resource columns)
   ├── coloc_credsets (partitioned by chr, clustered by dataset, data_type)
+  │   └── coloc_credsets_v (view: adds variant, resource columns)
   ├── exome_variant_results (partitioned by chr, clustered by dataset, gene, trait)
+  │   └── exome_variant_results_v (view: adds variant, resource columns)
   └── gene_burden_results (partitioned by chr, clustered by dataset, gene, trait)
+      └── gene_burden_results_v (view: adds resource column)
       ↓
-API (FastAPI)
+API (FastAPI) — exposes only views, not underlying tables
       ↓
 AI Agents / Applications
 ```

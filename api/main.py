@@ -68,6 +68,11 @@ MAX_BYTES_BILLED = int(os.environ.get("MAX_BYTES_BILLED", str(100 * 1024**3)))  
 
 bq_client = bigquery.Client(project=PROJECT_ID)
 
+# expose views (not underlying tables) so AI agents use the enriched schemas
+VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v"]
+# map base table names to views for backwards-compatible query auto-qualification
+_BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
+
 
 class QueryRequest(BaseModel):
     """SQL query request."""
@@ -126,7 +131,7 @@ async def get_schema():
     """Get database schema information."""
     tables = []
 
-    for table_name in ["credible_sets", "colocalization", "coloc_credsets", "exome_variant_results", "gene_burden_results"]:
+    for table_name in VIEWS:
         table_ref = f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
         try:
             table = bq_client.get_table(table_ref)
@@ -158,12 +163,17 @@ async def execute_query(request: QueryRequest):
     """Execute a SQL query against the genetics database."""
     sql = sanitize_query(request.sql)
 
-    # auto-qualify table names if not fully qualified
-    for table in ["credible_sets", "colocalization", "coloc_credsets", "exome_variant_results", "gene_burden_results"]:
-        # replace unqualified table names with fully qualified
-        sql = sql.replace(f" {table}", f" `{PROJECT_ID}.{DATASET_ID}.{table}`")
-        sql = sql.replace(f"FROM {table}", f"FROM `{PROJECT_ID}.{DATASET_ID}.{table}`")
-        sql = sql.replace(f"JOIN {table}", f"JOIN `{PROJECT_ID}.{DATASET_ID}.{table}`")
+    # auto-qualify table names and redirect base table names to views
+    for view in VIEWS:
+        fq = f"`{PROJECT_ID}.{DATASET_ID}.{view}`"
+        sql = sql.replace(f" {view}", f" {fq}")
+        sql = sql.replace(f"FROM {view}", f"FROM {fq}")
+        sql = sql.replace(f"JOIN {view}", f"JOIN {fq}")
+    for base, view in _BASE_TABLES.items():
+        fq = f"`{PROJECT_ID}.{DATASET_ID}.{view}`"
+        sql = sql.replace(f" {base}", f" {fq}")
+        sql = sql.replace(f"FROM {base}", f"FROM {fq}")
+        sql = sql.replace(f"JOIN {base}", f"JOIN {fq}")
 
     job_config = bigquery.QueryJobConfig(
         maximum_bytes_billed=MAX_BYTES_BILLED,
@@ -220,11 +230,13 @@ def _serialize_value(value: Any) -> Any:
 @app.get("/tables/{table_name}/sample")
 async def get_sample(table_name: str, limit: int = 10):
     """Get sample rows from a table."""
-    if table_name not in ["credible_sets", "colocalization", "coloc_credsets", "exome_variant_results", "gene_burden_results"]:
+    # accept both view names and base table names
+    resolved = _BASE_TABLES.get(table_name, table_name)
+    if resolved not in VIEWS:
         raise HTTPException(status_code=404, detail=f"Table not found: {table_name}")
 
     limit = min(limit, 100)
-    sql = f"SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}` LIMIT {limit}"
+    sql = f"SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.{resolved}` LIMIT {limit}"
 
     query_job = bq_client.query(sql)
     results = query_job.result()
@@ -241,13 +253,15 @@ async def get_stats():
     stats = {}
 
     # row counts
-    for table in ["credible_sets", "colocalization", "coloc_credsets", "exome_variant_results", "gene_burden_results"]:
+    for view in VIEWS:
         try:
-            table_ref = f"{PROJECT_ID}.{DATASET_ID}.{table}"
+            # get row count from underlying table (views don't have num_rows)
+            base_table = view.removesuffix("_v")
+            table_ref = f"{PROJECT_ID}.{DATASET_ID}.{base_table}"
             table_info = bq_client.get_table(table_ref)
-            stats[f"{table}_rows"] = table_info.num_rows
+            stats[f"{view}_rows"] = table_info.num_rows
         except Exception:
-            stats[f"{table}_rows"] = None
+            stats[f"{view}_rows"] = None
 
     # credible sets breakdown
     try:
@@ -256,7 +270,7 @@ async def get_stats():
             dataset,
             data_type,
             COUNT(*) as count
-        FROM `{PROJECT_ID}.{DATASET_ID}.credible_sets`
+        FROM `{PROJECT_ID}.{DATASET_ID}.credible_sets_v`
         GROUP BY dataset, data_type
         ORDER BY count DESC
         """
