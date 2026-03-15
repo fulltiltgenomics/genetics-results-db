@@ -286,6 +286,7 @@ genetics-results-db/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_all_data.sh       # Batch load credible sets and colocalization data
+│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses)
 │   ├── load_exome_data.sh     # Batch load exome results data
 │   └── deploy.sh              # Deploy API to Cloud Run
 ├── api/
@@ -319,12 +320,17 @@ genetics-results-db/
    ./scripts/load_all_data.sh
    ```
 
-3. **Load exome results data from GCS**:
+3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets):
+   ```bash
+   ./scripts/load_pseudo.sh
+   ```
+
+4. **Load exome results data from GCS**:
    ```bash
    ./scripts/load_exome_data.sh
    ```
 
-4. **Deploy API to Cloud Run** (optional):
+5. **Deploy API to Cloud Run** (optional):
    ```bash
    ./scripts/deploy.sh
    ```
