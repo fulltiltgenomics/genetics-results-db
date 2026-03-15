@@ -3,6 +3,7 @@ CREATE OR REPLACE VIEW `genetics_results.credible_sets_v` AS
 SELECT
   *,
   CONCAT(chr, ':', pos, ':', ref, ':', alt) AS variant,
+  LEAST(aaf, 1 - aaf) AS maf,
   CASE
     WHEN dataset LIKE 'FinnGen%MVP_UKBB%' THEN 'finngen_mvp_ukbb'
     WHEN dataset LIKE 'FinnGen%UKBB%' THEN 'finngen_ukbb'

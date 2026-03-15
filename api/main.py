@@ -73,6 +73,15 @@ VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_varia
 # map base table names to views for backwards-compatible query auto-qualification
 _BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
 
+# description overrides for computed view columns that BigQuery doesn't describe
+_COLUMN_DESCRIPTIONS = {
+    "credible_sets_v": {
+        "maf": "Minor allele frequency, derived as LEAST(aaf, 1-aaf). Use this column directly for MAF filtering instead of computing from aaf.",
+        "variant": "Variant identifier as chr:pos:ref:alt",
+        "resource": "Normalized dataset resource name",
+    },
+}
+
 
 class QueryRequest(BaseModel):
     """SQL query request."""
@@ -135,12 +144,13 @@ async def get_schema():
         table_ref = f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
         try:
             table = bq_client.get_table(table_ref)
+            overrides = _COLUMN_DESCRIPTIONS.get(table_name, {})
             columns = [
                 {
                     "name": field.name,
                     "type": field.field_type,
                     "mode": field.mode,
-                    "description": field.description or "",
+                    "description": overrides.get(field.name, field.description or ""),
                 }
                 for field in table.schema
             ]

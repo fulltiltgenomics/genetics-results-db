@@ -68,6 +68,7 @@ Fine-mapped credible set variants from multiple genetics datasets.
 | cs_size | INT64 | No | Credible set size |
 | cs_min_r2 | FLOAT64 | No | Minimum R² between variants in credible set |
 | aaf | FLOAT64 | No | Alternate allele frequency |
+| maf | FLOAT64 | No | Minor allele frequency (view only, derived as LEAST(aaf, 1-aaf)) |
 | most_severe | STRING | No | Most severe variant consequence |
 | gene_most_severe | STRING | No | Gene with most severe consequence |
 
