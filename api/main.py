@@ -63,7 +63,7 @@ app.add_middleware(
 
 PROJECT_ID = os.environ.get("PROJECT_ID", "google-project-id")
 DATASET_ID = os.environ.get("DATASET_ID", "genetics_results")
-MAX_ROWS = int(os.environ.get("MAX_ROWS", "10000"))
+MAX_ROWS = int(os.environ.get("MAX_ROWS", "100000"))
 MAX_BYTES_BILLED = int(os.environ.get("MAX_BYTES_BILLED", str(100 * 1024**3)))  # 100 GB default
 
 bq_client = bigquery.Client(project=PROJECT_ID)
