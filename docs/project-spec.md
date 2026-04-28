@@ -220,7 +220,7 @@ Gene-level burden test results from UKBB exome sequencing (GeneBASS). Includes b
 ```
 
 - `sql` (required): SQL query to execute
-- `max_rows` (default 1000, max 10000): Maximum rows to return
+- `max_rows` (default 1000, max 100000): Maximum rows to return
 - `dry_run` (default false): Estimate query cost without executing
 
 ### Query Response Format
@@ -264,7 +264,7 @@ Configuration via environment variables:
 | PROJECT_ID | (from gcloud) | GCP project ID |
 | DATASET_ID | genetics_results | BigQuery dataset name |
 | LOCATION | europe-west1 | BigQuery dataset location |
-| MAX_ROWS | 10000 | Maximum rows returned per query |
+| MAX_ROWS | 100000 | Maximum rows returned per query |
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
 | PORT | 8080 | API server port |
 

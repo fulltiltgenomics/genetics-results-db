@@ -62,7 +62,7 @@ curl -X POST http://localhost:8080/query \
 |----------|---------|-------------|
 | `PROJECT_ID` | project-id | GCP project ID |
 | `DATASET_ID` | genetics_results | BigQuery dataset name |
-| `MAX_ROWS` | 10000 | Max rows returned per query |
+| `MAX_ROWS` | 100000 | Max rows returned per query |
 | `MAX_BYTES_BILLED` | 107374182400 | Max bytes billed per query |
 | `PORT` | 8080 | Server port |
 
