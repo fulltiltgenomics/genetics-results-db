@@ -16,8 +16,11 @@ Cannot yet be used as is without access to restricted data.
 
 ## Server setup
 
+Requires [uv](https://docs.astral.sh/uv/):
+
 ```bash
-pip install -r api/requirements.txt
+uv venv
+uv pip install -r api/requirements.txt
 ```
 
 ## Run the REST API server
