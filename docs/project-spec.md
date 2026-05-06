@@ -36,7 +36,7 @@ BigQuery Dataset
   ├── exome_variant_results (partitioned by chr, clustered by dataset, gene, trait)
   │   └── exome_variant_results_v (view: adds variant, resource columns)
   └── gene_burden_results (partitioned by chr, clustered by dataset, gene, trait)
-      └── gene_burden_results_v (view: adds resource column)
+      └── gene_burden_results_v (view: adds resource column, hides mlog10p_skat/mlog10p_skato)
       ↓
 API (FastAPI) — exposes only views, not underlying tables
       ↓
@@ -176,8 +176,8 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx, I
 | gene_end_pos | INT64 | Yes | Gene end position |
 | annotation | STRING | Yes | Annotation category (pLoF, missense, etc.) |
 | mlog10p_burden | FLOAT64 | No | -log10(p-value) for burden test |
-| mlog10p_skat | FLOAT64 | No | -log10(p-value) for SKAT test |
-| mlog10p_skato | FLOAT64 | No | -log10(p-value) for SKAT-O test |
+| mlog10p_skat | FLOAT64 | No | -log10(p-value) for SKAT test (hidden from `gene_burden_results_v`) |
+| mlog10p_skato | FLOAT64 | No | -log10(p-value) for SKAT-O test (hidden from `gene_burden_results_v`) |
 | beta | FLOAT64 | No | Effect size |
 | se | FLOAT64 | No | Standard error |
 | total_variants | INT64 | No | Number of variants in gene |
@@ -204,7 +204,7 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx, I
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/schema` | GET | Get table schemas with column descriptions |
+| `/schema` | GET | Get table schemas with column descriptions and allowed values for categorical columns |
 | `/stats` | GET | Get database statistics and row counts |
 | `/tables/{name}/sample` | GET | Get sample rows from a table |
 | `/query` | POST | Execute SQL query |
@@ -234,6 +234,28 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx, I
   "truncated": false
 }
 ```
+
+### Schema Response Format
+
+`/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Two shapes:
+
+- `allowed_values`: flat list of valid values (e.g. `resource`, `dataset`, `most_severe`).
+- `allowed_values_by_<col>`: mapping from a parent column's value to the values valid for that parent. Used when a column's valid set depends on another (e.g. `data_type` depends on `resource`, `annotation` depends on `resource`).
+
+Example:
+```json
+{
+  "name": "data_type",
+  "type": "STRING",
+  "allowed_values_by_resource": {
+    "open_targets": ["GWAS", "eQTL", "pQTL", "sQTL", "caQTL"],
+    "finngen": ["GWAS"],
+    "ukbb": ["GWAS"]
+  }
+}
+```
+
+Values are computed by querying `SELECT DISTINCT` on each view and cached in-process for one hour. New datasets show up automatically after the cache expires.
 
 ### Security
 

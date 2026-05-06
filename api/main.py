@@ -7,6 +7,7 @@ import json
 import os
 import logging
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -82,6 +83,97 @@ _COLUMN_DESCRIPTIONS = {
     },
 }
 
+# Low-cardinality categorical columns whose distinct values are exposed in /schema
+# so agents can filter without guessing. Values mapped to None are flat lists; values
+# mapped to a column name indicate the column's allowed values depend on that column
+# (e.g. data_type values differ per resource).
+_CATEGORICAL_COLUMNS: dict[str, dict[str, str | None]] = {
+    "credible_sets_v": {
+        "resource": None,
+        "dataset": None,
+        "data_type": "resource",
+        "most_severe": None,
+    },
+    "colocalization_v": {
+        "resource1": None,
+        "resource2": None,
+        "dataset1": None,
+        "dataset2": None,
+        "data_type1": "resource1",
+        "data_type2": "resource2",
+    },
+    "coloc_credsets_v": {
+        "resource": None,
+        "dataset": None,
+        "data_type": "resource",
+    },
+    "exome_variant_results_v": {
+        "resource": None,
+        "dataset": None,
+        "annotation": "resource",
+    },
+    "gene_burden_results_v": {
+        "resource": None,
+        "dataset": None,
+        "annotation": "resource",
+    },
+}
+
+_VALUES_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_VALUES_CACHE_TTL_SECONDS = 3600
+
+
+def _get_categorical_values(view_name: str) -> dict[str, Any]:
+    """Return distinct values for a view's categorical columns.
+
+    Result keys are either the column name (flat list of allowed values) or
+    `<col>_by_<dep>` (mapping from dependency value to allowed values). Cached
+    in-process for `_VALUES_CACHE_TTL_SECONDS` to keep `/schema` cheap.
+    """
+    config = _CATEGORICAL_COLUMNS.get(view_name)
+    if not config:
+        return {}
+
+    cached = _VALUES_CACHE.get(view_name)
+    now = time.time()
+    if cached and now - cached[0] < _VALUES_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    flat_cols = [col for col, dep in config.items() if dep is None]
+    dep_cols = [(col, dep) for col, dep in config.items() if dep is not None]
+
+    result: dict[str, Any] = {}
+    fq = f"`{PROJECT_ID}.{DATASET_ID}.{view_name}`"
+
+    if flat_cols:
+        agg = ", ".join(f"ARRAY_AGG(DISTINCT {c} IGNORE NULLS) AS {c}" for c in flat_cols)
+        sql = f"SELECT {agg} FROM {fq}"
+        try:
+            row = next(iter(bq_client.query(sql).result()))
+            for c in flat_cols:
+                result[c] = sorted(row[c] or [])
+        except Exception as e:
+            logger.warning(f"Distinct value fetch failed for {view_name}: {e}")
+
+    deps_grouped: dict[str, list[str]] = {}
+    for col, dep in dep_cols:
+        deps_grouped.setdefault(dep, []).append(col)
+
+    for dep, cols in deps_grouped.items():
+        agg = ", ".join(f"ARRAY_AGG(DISTINCT {c} IGNORE NULLS) AS {c}" for c in cols)
+        sql = f"SELECT {dep}, {agg} FROM {fq} WHERE {dep} IS NOT NULL GROUP BY {dep}"
+        try:
+            for row in bq_client.query(sql).result():
+                key = row[dep]
+                for c in cols:
+                    result.setdefault(f"{c}_by_{dep}", {})[key] = sorted(row[c] or [])
+        except Exception as e:
+            logger.warning(f"Grouped distinct value fetch failed for {view_name}.{dep}: {e}")
+
+    if result:
+        _VALUES_CACHE[view_name] = (now, result)
+    return result
+
 
 class QueryRequest(BaseModel):
     """SQL query request."""
@@ -107,7 +199,7 @@ class TableInfo(BaseModel):
     name: str
     description: str
     row_count: int
-    columns: list[dict[str, str]]
+    columns: list[dict[str, Any]]
 
 
 class SchemaResponse(BaseModel):
@@ -145,15 +237,25 @@ async def get_schema():
         try:
             table = bq_client.get_table(table_ref)
             overrides = _COLUMN_DESCRIPTIONS.get(table_name, {})
-            columns = [
-                {
+            cat_values = _get_categorical_values(table_name)
+            columns: list[dict[str, Any]] = []
+            for field in table.schema:
+                col: dict[str, Any] = {
                     "name": field.name,
                     "type": field.field_type,
                     "mode": field.mode,
                     "description": overrides.get(field.name, field.description or ""),
                 }
-                for field in table.schema
-            ]
+                if field.name in cat_values:
+                    col["allowed_values"] = cat_values[field.name]
+                grouped_key = next(
+                    (k for k in cat_values if k.startswith(f"{field.name}_by_")), None
+                )
+                if grouped_key:
+                    col[grouped_key.replace(field.name, "allowed_values", 1)] = cat_values[
+                        grouped_key
+                    ]
+                columns.append(col)
             tables.append(
                 TableInfo(
                     name=table_name,
