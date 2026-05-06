@@ -10,6 +10,7 @@ ts() {
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-bucket-name}"
+GCS_PREFIX="${GCS_PREFIX:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -17,15 +18,15 @@ ts "Loading data into ${PROJECT_ID}.${DATASET_ID}"
 
 # credible sets files
 CREDSET_FILES=(
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/finngen_core/r13_20251024/FinnGen_R13_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/finngen_kanta/r12_20251024/FinnGen_R12kanta_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/finngen_drugs/r12_20251024/FinnGen_R12drugs_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/finngen_olink/20251024/FinnGen_Olink_1-4_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/ukb_ppp/20251024/UKB_PPP_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/finngen_snrnaseq/20251024/FinnGen_snRNAseq_202509_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/finngen_atacseq/20251118/FinnGen_ATACseq_202509_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/eqtl_catalogue/r7/eQTL_Catalogue_R7.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/credible_sets/open_targets/202512/Open_Targets_25.12_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_core/r13_20251024/FinnGen_R13_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_kanta/r12_20251024/FinnGen_R12kanta_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_drugs/r12_20251024/FinnGen_R12drugs_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_olink/20251024/FinnGen_Olink_1-4_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/ukb_ppp/20251024/UKB_PPP_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_snrnaseq/20251024/FinnGen_snRNAseq_202509_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_atacseq/20251118/FinnGen_ATACseq_202509_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/eqtl_catalogue/r7/eQTL_Catalogue_R7.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/open_targets/202512/Open_Targets_25.12_credible_sets.tsv.gz"
 )
 
 echo ""
@@ -54,11 +55,11 @@ done
 
 # colocalization files
 COLOC_FILES=(
-  "gs://${GCS_BUCKET}/results_api_data/coloc/colocQC.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/coloc/FinnGen-R12.eQTL.colocQC.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/coloc/FinnGen-KANTA.eQTL.colocQC.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/coloc/FinnGen-R12.caQTL.colocQC.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/coloc/FinnGen-KANTA.caQTL.colocQC.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/colocQC.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/FinnGen-R12.eQTL.colocQC.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/FinnGen-KANTA.eQTL.colocQC.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/FinnGen-R12.caQTL.colocQC.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/FinnGen-KANTA.caQTL.colocQC.munged.tsv.gz"
 )
 
 echo ""
@@ -86,11 +87,11 @@ done
 
 # coloc credsets files
 COLOC_CREDSET_FILES=(
-  "gs://${GCS_BUCKET}/results_api_data/coloc/coloc.credsets.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/coloc/FinnGen-R12.eQTL.coloc.credsets.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/coloc/FinnGen-KANTA.eQTL.coloc.credsets.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/coloc/FinnGen-R12.caQTL.coloc.credsets.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/coloc/FinnGen-KANTA.caQTL.coloc.credsets.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/coloc.credsets.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/FinnGen-R12.eQTL.coloc.credsets.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/FinnGen-KANTA.eQTL.coloc.credsets.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/FinnGen-R12.caQTL.coloc.credsets.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}coloc/FinnGen-KANTA.caQTL.coloc.credsets.munged.tsv.gz"
 )
 
 echo ""
