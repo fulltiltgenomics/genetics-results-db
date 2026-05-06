@@ -291,10 +291,10 @@ genetics-results-db/
 │   ├── load_exome_data.sh     # Batch load exome results data
 │   └── deploy.sh              # Deploy API to Cloud Run
 ├── api/
-│   ├── main.py                # FastAPI application
-│   └── requirements.txt       # Python dependencies
+│   └── main.py                # FastAPI application
 ├── docs/
 │   └── project-spec.md        # This document
+├── pyproject.toml             # Python project metadata and dependencies
 ├── Dockerfile                 # Container image definition
 ├── cloudbuild.yaml            # CI/CD configuration
 ├── README.md                  # Usage documentation

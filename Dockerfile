@@ -1,9 +1,11 @@
 FROM python:3.12-slim
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
-COPY api/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+RUN uv pip install --system --no-cache -r pyproject.toml
 
 COPY api/ .
 

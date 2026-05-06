@@ -20,7 +20,7 @@ Requires [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv venv
-uv pip install -r api/requirements.txt
+uv pip install -r pyproject.toml
 ```
 
 ## Run the REST API server
