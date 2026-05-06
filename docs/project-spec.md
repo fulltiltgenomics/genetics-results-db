@@ -36,7 +36,7 @@ BigQuery Dataset
   ├── exome_variant_results (partitioned by chr, clustered by dataset, gene, trait)
   │   └── exome_variant_results_v (view: adds variant, resource columns)
   └── gene_burden_results (partitioned by chr, clustered by dataset, gene, trait)
-      └── gene_burden_results_v (view: adds resource column)
+      └── gene_burden_results_v (view: adds resource column, hides mlog10p_skat/mlog10p_skato)
       ↓
 API (FastAPI) — exposes only views, not underlying tables
       ↓
@@ -176,8 +176,8 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx, I
 | gene_end_pos | INT64 | Yes | Gene end position |
 | annotation | STRING | Yes | Annotation category (pLoF, missense, etc.) |
 | mlog10p_burden | FLOAT64 | No | -log10(p-value) for burden test |
-| mlog10p_skat | FLOAT64 | No | -log10(p-value) for SKAT test |
-| mlog10p_skato | FLOAT64 | No | -log10(p-value) for SKAT-O test |
+| mlog10p_skat | FLOAT64 | No | -log10(p-value) for SKAT test (hidden from `gene_burden_results_v`) |
+| mlog10p_skato | FLOAT64 | No | -log10(p-value) for SKAT-O test (hidden from `gene_burden_results_v`) |
 | beta | FLOAT64 | No | Effect size |
 | se | FLOAT64 | No | Standard error |
 | total_variants | INT64 | No | Number of variants in gene |
