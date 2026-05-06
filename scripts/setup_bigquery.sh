@@ -44,7 +44,7 @@ if [ "$RECREATE" = true ]; then
 fi
 
 # create dataset if it doesn't exist
-if ! bq show --project_id="${PROJECT_ID}" "${DATASET_ID}" &>/dev/null; then
+if ! bq show --project_id="${PROJECT_ID}" "${PROJECT_ID}:${DATASET_ID}" &>/dev/null; then
   echo "Creating dataset ${DATASET_ID}..."
   bq mk \
     --project_id="${PROJECT_ID}" \
