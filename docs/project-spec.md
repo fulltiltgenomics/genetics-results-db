@@ -163,11 +163,11 @@ Variant-level association results from UKBB exome sequencing (GeneBASS). Filtere
 
 ### gene_burden_results
 
-Gene-level burden test results from UKBB exome sequencing (GeneBASS). Includes burden, SKAT, and SKAT-O tests. Filtered for -log10(p-value of any test) >= e.g. 4.
+Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx, IBD exomes, SCHEMA, etc.). Includes burden, SKAT, and SKAT-O tests. Filtered for -log10(p-value of any test) >= e.g. 4.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| dataset | STRING | Yes | Source dataset (genebass) |
+| dataset | STRING | Yes | Source dataset (genebass, BipEx2, IBD_exome_2026, SCHEMA, SCHEMA2, ...) |
 | trait | STRING | Yes | Trait identifier |
 | gene | STRING | Yes | Gene symbol |
 | gene_id | STRING | Yes | Ensembl gene ID |
@@ -288,13 +288,14 @@ genetics-results-db/
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_all_data.sh       # Batch load credible sets and colocalization data
 │   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses)
-│   ├── load_exome_data.sh     # Batch load exome results data
+│   ├── load_exome_data.sh     # Batch load Genebass exome variant + gene burden results
+│   ├── load_gene_burden_extra.sh # Append additional gene burden results (BipEx, etc.)
 │   └── deploy.sh              # Deploy API to Cloud Run
 ├── api/
-│   ├── main.py                # FastAPI application
-│   └── requirements.txt       # Python dependencies
+│   └── main.py                # FastAPI application
 ├── docs/
 │   └── project-spec.md        # This document
+├── pyproject.toml             # Python project metadata and dependencies
 ├── Dockerfile                 # Container image definition
 ├── cloudbuild.yaml            # CI/CD configuration
 ├── README.md                  # Usage documentation
@@ -331,7 +332,12 @@ genetics-results-db/
    ./scripts/load_exome_data.sh
    ```
 
-5. **Deploy API to Cloud Run** (optional):
+5. **Append additional gene burden results** (BipEx, etc.) on top of the Genebass load:
+   ```bash
+   ./scripts/load_gene_burden_extra.sh
+   ```
+
+6. **Deploy API to Cloud Run** (optional):
    ```bash
    ./scripts/deploy.sh
    ```

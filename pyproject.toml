@@ -1,0 +1,13 @@
+[project]
+name = "genetics-results-db"
+version = "0.1.0"
+description = "BigQuery database for genetics fine-mapping, colocalization, and exome sequencing results with a REST API"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.135.3",
+    "uvicorn[standard]>=0.43.0",
+    "google-cloud-bigquery>=3.41.0",
+    "pydantic>=2.12.5",
+]
