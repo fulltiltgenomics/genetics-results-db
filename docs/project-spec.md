@@ -204,7 +204,7 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx, I
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/schema` | GET | Get table schemas with column descriptions |
+| `/schema` | GET | Get table schemas with column descriptions and allowed values for categorical columns |
 | `/stats` | GET | Get database statistics and row counts |
 | `/tables/{name}/sample` | GET | Get sample rows from a table |
 | `/query` | POST | Execute SQL query |
@@ -234,6 +234,28 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx, I
   "truncated": false
 }
 ```
+
+### Schema Response Format
+
+`/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Two shapes:
+
+- `allowed_values`: flat list of valid values (e.g. `resource`, `dataset`, `most_severe`).
+- `allowed_values_by_<col>`: mapping from a parent column's value to the values valid for that parent. Used when a column's valid set depends on another (e.g. `data_type` depends on `resource`, `annotation` depends on `resource`).
+
+Example:
+```json
+{
+  "name": "data_type",
+  "type": "STRING",
+  "allowed_values_by_resource": {
+    "open_targets": ["GWAS", "eQTL", "pQTL", "sQTL", "caQTL"],
+    "finngen": ["GWAS"],
+    "ukbb": ["GWAS"]
+  }
+}
+```
+
+Values are computed by querying `SELECT DISTINCT` on each view and cached in-process for one hour. New datasets show up automatically after the cache expires.
 
 ### Security
 
