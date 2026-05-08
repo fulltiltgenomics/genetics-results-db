@@ -74,13 +74,277 @@ VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_varia
 # map base table names to views for backwards-compatible query auto-qualification
 _BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
 
-# description overrides for computed view columns that BigQuery doesn't describe
+# human-readable table descriptions for agents
+_TABLE_DESCRIPTIONS = {
+    "credible_sets_v": (
+        "Fine-mapped credible sets with variant-level posterior inclusion probabilities (PIP). "
+        "Contains GWAS, eQTL, pQTL, sQTL, caQTL results across multiple resources."
+    ),
+    "colocalization_v": (
+        "Colocalization analysis results (coloc.susie) between pairs of studies. "
+        "PP_H4_abf indicates shared causal variant probability. "
+    ),
+    "coloc_credsets_v": (
+        "Individual credible set variants in colocalized credible sets. "
+        "Join with colocalization_v on cs1_id/cs2_id for full colocalization context."
+    ),
+    "exome_variant_results_v": (
+        "Single-variant exome association results (e.g. Genebass/UK Biobank exomes)."
+    ),
+    "gene_burden_results_v": (
+        "Gene-level burden test results from exome sequencing studies "
+        "(e.g. BipEx2, SCHEMA2, Genebass, IBD exome)."
+    ),
+}
+
+# column descriptions — overrides BQ field descriptions and fills in missing ones
 _COLUMN_DESCRIPTIONS = {
     "credible_sets_v": {
-        "maf": "Minor allele frequency, derived as LEAST(aaf, 1-aaf). Use this column directly for MAF filtering instead of computing from aaf.",
-        "variant": "Variant identifier as chr:pos:ref:alt",
-        "resource": "Normalized dataset resource name",
+        "dataset": "Specific study/release name within a resource (e.g. FinnGen_R13, BipEx2)",
+        "data_type": "Type of association: GWAS, eQTL, pQTL, sQTL, caQTL, or metaboQTL",
+        "trait": "Trait/phenotype name",
+        "trait_original": "Original trait name in the respective dataset, e.g. phenotype code",
+        "cell_type": "Cell type or tissue context (for QTL data)",
+        "chr": "Chromosome number",
+        "pos": "Genomic position (GRCh38)",
+        "ref": "Reference allele",
+        "alt": "Alternative (effect) allele",
+        "mlog10p": "-log10(p-value). Higher = more significant. 7.30103 = genome-wide significance (p-value 5e-8)",
+        "beta": "Effect size estimate (log-OR for binary traits)",
+        "se": "Standard error of beta",
+        "pip": "Posterior inclusion probability from fine-mapping (0-1). Higher = more likely causal",
+        "cs_id": "Credible set identifier — groups variants in the same causal signal",
+        "cs_size": "Number of variants in this credible set",
+        "cs_min_r2": "Minimum pairwise LD r² within the credible set",
+        "aaf": "Alternative allele frequency. Prefer maf column for minor allele frequency",
+        "most_severe": "Most severe VEP-predicted variant consequence",
+        "gene_most_severe": "Gene symbol associated with the most severe consequence",
+        "variant": "Variant identifier as chr:pos:ref:alt, chromosome X is 23",
+        "maf": "Minor allele frequency = LEAST(aaf, 1-aaf). Use directly instead of computing from aaf",
+        "resource": "Data source identifier (lowercase). Always filter by this column, not dataset",
     },
+    "colocalization_v": {
+        "dataset1": "Study 1 dataset name",
+        "dataset2": "Study 2 dataset name",
+        "data_type1": "Study 1 association type (GWAS, eQTL, pQTL, sQTL, caQTL, metaboQTL)",
+        "data_type2": "Study 2 association type (GWAS, eQTL, pQTL, sQTL, caQTL, metaboQTL)",
+        "trait1": "Trait/phenotype name for study 1",
+        "trait1_original": "Original trait name for study 1, e.g. phenotype code",
+        "trait2": "Trait/phenotype name for study 2",
+        "trait2_original": "Original trait name for study 2, e.g. phenotype code",
+        "cell_type1": "Cell/tissue context for trait 1",
+        "cell_type2": "Cell/tissue context for trait 2",
+        "cs1_id": "Credible set ID for trait 1",
+        "cs2_id": "Credible set ID for trait 2",
+        "hit1": "Variant that coloc predicted to be the most likely causal variant in trait 1 (chr:pos:ref:alt)",
+        "hit2": "Variant that coloc predicted to be the most likely causal variant in trait 2 (chr:pos:ref:alt)",
+        "hit1_beta": "Effect size for lead variant in trait 1",
+        "hit1_mlog10p": "-log10(p) for lead variant in trait 1",
+        "hit2_beta": "Effect size for lead variant in trait 2",
+        "hit2_mlog10p": "-log10(p) for lead variant in trait 2",
+        "chr": "Chromosome number, chromosome X is 23",
+        "region_start_min": "Start of the analyzed region (GRCh38)",
+        "region_end_max": "End of the analyzed region (GRCh38)",
+        "PP_H0_abf": "Posterior probability neither trait has association in the region",
+        "PP_H1_abf": "Posterior probability only trait 1 has association",
+        "PP_H2_abf": "Posterior probability only trait 2 has association",
+        "PP_H3_abf": "Posterior probability both traits associate via DIFFERENT causal variants",
+        "PP_H4_abf": "Posterior probability both traits associate and share the SAME causal variant. Generally >0.8 suggests colocalization",
+        "nsnps": "Number of SNPs in the region in both credible sets",
+        "nsnps1": "SNPs in the region for trait 1",
+        "nsnps2": "SNPs in the region for trait 2",
+        "cs1_log10bf": "log10 Bayes factor for credible set 1",
+        "cs2_log10bf": "log10 Bayes factor for credible set 2",
+        "clpp": "Causal posterior probability",
+        "clpa": "Causal posterior agreement",
+        "cs1_size": "Number of variants in credible set 1",
+        "cs2_size": "Number of variants in credible set 2",
+        "cs_overlap": "Number of variants shared between both credible sets",
+        "topInOverlap": "Whether the maximum PIP variant was in overlap of regions or not, for both traits, e.g. 1,1 or 0,0",
+        "resource1": "Data source for study 1 (lowercase)",
+        "resource2": "Data source for study 2 (lowercase)",
+    },
+    "coloc_credsets_v": {
+        "dataset": "Study/release name",
+        "data_type": "Association type (GWAS, eQTL, pQTL, etc.)",
+        "trait": "Trait/phenotype name",
+        "trait_original": "Original trait name in the respective dataset, e.g. phenotype code",
+        "cell_type": "Cell/tissue context",
+        "chr": "Chromosome number, chromosome X is 23",
+        "pos": "Genomic position (GRCh38)",
+        "ref": "Reference allele",
+        "alt": "Alternative (effect) allele",
+        "mlog10p": "-log10(p-value)",
+        "beta": "Effect size estimate (log-OR for binary traits)",
+        "se": "Standard error of beta",
+        "pip": "Posterior inclusion probability from fine-mapping (0-1). Higher = more likely causal",
+        "cs_id": "Credible set identifier (matches cs1_id or cs2_id in colocalization_v)",
+        "variant": "Variant identifier as chr:pos:ref:alt",
+        "resource": "Data source identifier (lowercase)",
+    },
+    "exome_variant_results_v": {
+        "dataset": "Study name (e.g. genebass)",
+        "chr": "Chromosome number, chromosome X is 23",
+        "pos": "Genomic position (GRCh38)",
+        "ref": "Reference allele",
+        "alt": "Alternative (effect) allele",
+        "gene": "Gene symbol (e.g. PCSK9)",
+        "annotation": "Variant annotation filter (e.g. pLoF, missense, synonymous, LC)", # TODO harmonize in data
+        "mlog10p": "-log10(p-value) for the single-variant association. Higher = more significant",
+        "beta": "Effect size estimate (log-OR for binary traits)",
+        "se": "Standard error of beta",
+        "af_overall": "Overall alternative allele frequency",
+        "af_cases": "Alternative allele frequency in cases",
+        "af_controls": "Alternative allele frequency in controls",
+        "ac": "Alternative allele count",
+        "an": "Alternative allele number (total alleles genotyped)",
+        "heritability": "SNP heritability estimate for the trait",
+        "trait": "Trait/phenotype name",
+        "variant": "Variant identifier as chr:pos:ref:alt",
+        "resource": "Data source identifier (lowercase)",
+    },
+    "gene_burden_results_v": {
+        "dataset": "Study name (e.g. BipEx2, SCHEMA2, genebass, IBD_exome_2026)",
+        "trait": "Trait/phenotype name",
+        "gene": "Gene symbol (e.g. PCSK9)",
+        "gene_id": "Ensembl gene ID (e.g. ENSG00000169174)",
+        "chr": "Chromosome number, chromosome X is 23",
+        "gene_start_pos": "Gene start position (GRCh38)",
+        "gene_end_pos": "Gene end position (GRCh38)",
+        "annotation": "Variant annotation filter used in burden test (e.g. pLoF, missense, PTV)", # TODO harmonize in data
+        "mlog10p_burden": "-log10(p-value) from the gene-level burden test. Higher = more significant",
+        "beta": "Effect size estimate from burden test",
+        "se": "Standard error of beta",
+        "total_variants": "Total qualifying variants in the gene",
+        "total_variants_pheno": "Qualifying variants with phenotype data",
+        "n_cases": "Number of cases in the analysis",
+        "n_controls": "Number of controls in the analysis",
+        "description": "Human-readable trait/phenotype description",
+        "coding_description": "Coded trait description",
+        "category": "Trait category grouping",
+        "resource": "Data source identifier (lowercase). Use this for filtering, not dataset",
+    },
+}
+
+# resource metadata with human-readable labels, descriptions, and common aliases
+# so agents can map user intent (e.g. "bipex") to the correct filter value ("bipex2")
+_RESOURCE_METADATA: dict[str, dict[str, Any]] = {
+    "finngen": {
+        "label": "FinnGen",
+        "description": "FinnGen study — GWAS, eQTL, pQTL, caQTL results from Finnish biobank data",
+        "aliases": ["FinnGen"],
+    },
+    "finngen_ukbb": {
+        "label": "FinnGen+UKB",
+        "description": "FinnGen + UK Biobank GWAS meta-analysis",
+        "aliases": ["finngen ukbb", "finngen uk biobank"],
+    },
+    "finngen_mvp_ukbb": {
+        "label": "FinnGen+MVP+UKB",
+        "description": "FinnGen + Million Veteran Program + UK Biobank GWAS meta-analysis",
+        "aliases": ["finngen mvp", "finngen mvp ukbb"],
+    },
+    "open_targets": {
+        "label": "Open Targets Genetics",
+        "description": "Open Targets GWAS summary statistics and fine-mapping",
+        "aliases": ["open targets", "OT", "OTG"],
+    },
+    "ukbb": {
+        "label": "UK Biobank",
+        "description": "UK Biobank pQTL and GWAS results",
+        "aliases": ["uk biobank", "UKB", "UKBB"],
+    },
+    "bipex2": {
+        "label": "BipEx2",
+        "description": "Bipolar Exome Sequencing study v2 — gene burden results for bipolar disorder",
+        "aliases": ["bipex", "BipEx", "bipolar exome"],
+    },
+    "schema2": {
+        "label": "SCHEMA2",
+        "description": "Schizophrenia Exome Meta-analysis v2 — gene burden results for schizophrenia",
+        "aliases": ["schema", "SCHEMA", "schizophrenia exome"],
+    },
+    "genebass": {
+        "label": "Genebass",
+        "description": "Gene burden results and EWAS exome variant results from UK Biobank",
+        "aliases": ["gene bass", "uk biobank exome", "UKB exome"],
+    },
+    "ibd_exome_2026": {
+        "label": "IBD Exome 2026",
+        "description": "IBD (inflammatory bowel disease) exome sequencing project gene burden and variant analysis",
+        "aliases": ["ibd exome", "IBD"],
+    },
+    "finnliver": {
+        "label": "FinnLiver",
+        "description": "FinnLiver liver eQTL study",
+        "aliases": ["finn liver", "liver eQTL"],
+    },
+    "generisk": {
+        "label": "GeneRisk",
+        "description": "GeneRisk metabolome GWAS study",
+        "aliases": [],
+    },
+    "interval": {
+        "label": "INTERVAL",
+        "description": "INTERVAL pQTL study",
+        "aliases": [],
+    },
+}
+
+# prefix patterns for collection resources (many IDs following a pattern)
+# these are collapsed in the schema to avoid flooding the response
+_COLLECTION_RESOURCE_PREFIXES: dict[str, dict[str, str]] = {
+    "qtd": {
+        "label": "eQTL Catalogue",
+        "description": (
+            "eQTL Catalogue datasets — hundreds of tissue/cell-type QTL studies. "
+            "Dataset IDs follow the pattern QTDNNNNNN (e.g. QTD000001). "
+            "Use the list_datasets tool to browse available eQTL Catalogue datasets." # TODO tools are not related to the db
+        ),
+        "data_types": "eQTL, sQTL",
+    },
+}
+
+# example SQL queries per table to guide agents
+_TABLE_EXAMPLES: dict[str, list[dict[str, str]]] = {
+    "credible_sets_v": [
+        {
+            "description": "Fine-mapped variants for a gene from FinnGen with high PIP",
+            "sql": "SELECT trait, variant, pip, mlog10p, beta FROM credible_sets_v WHERE gene_most_severe = 'PCSK9' AND resource = 'finngen' AND pip > 0.1 ORDER BY pip DESC",
+        },
+        {
+            "description": "Credible sets for a phenotype across resources",
+            "sql": "SELECT resource, dataset, variant, pip, mlog10p FROM credible_sets_v WHERE trait = 'T2D' AND pip > 0.5 ORDER BY pip DESC LIMIT 50",
+        },
+    ],
+    "colocalization_v": [
+        {
+            "description": "Find GWAS-eQTL colocalizations for a gene",
+            "sql": "SELECT trait1, trait2, cell_type2, PP_H4_abf, hit1, dataset2 FROM colocalization_v WHERE trait2 = 'PCSK9' AND data_type2 = 'eQTL' AND PP_H4_abf > 0.8 ORDER BY PP_H4_abf DESC",
+        },
+    ],
+    "coloc_credsets_v": [
+        {
+            "description": "Get variants in a colocalization credible set",
+            "sql": "SELECT variant, pip, mlog10p, beta FROM coloc_credsets_v WHERE cs_id = 'cs_id_here' ORDER BY pip DESC",
+        },
+    ],
+    "exome_variant_results_v": [
+        {
+            "description": "Significant exome variant associations for a gene",
+            "sql": "SELECT gene, variant, annotation, mlog10p, beta, trait FROM exome_variant_results_v WHERE gene = 'PCSK9' AND mlog10p > 3 ORDER BY mlog10p DESC",
+        },
+    ],
+    "gene_burden_results_v": [
+        {
+            "description": "Significant gene burden results from BipEx2 bipolar exome study",
+            "sql": "SELECT gene, annotation, mlog10p_burden, beta, n_cases, n_controls, description FROM gene_burden_results_v WHERE resource = 'bipex2' AND mlog10p_burden > 3 ORDER BY mlog10p_burden DESC LIMIT 20",
+        },
+        {
+            "description": "Compare burden results for a gene across all exome studies",
+            "sql": "SELECT resource, dataset, annotation, mlog10p_burden, beta, description FROM gene_burden_results_v WHERE gene = 'PCSK9' ORDER BY mlog10p_burden DESC",
+        },
+    ],
 }
 
 # Low-cardinality categorical columns whose distinct values are exposed in /schema
@@ -90,31 +354,31 @@ _COLUMN_DESCRIPTIONS = {
 _CATEGORICAL_COLUMNS: dict[str, dict[str, str | None]] = {
     "credible_sets_v": {
         "resource": None,
-        "dataset": None,
+        "dataset": "resource",
         "data_type": "resource",
         "most_severe": None,
     },
     "colocalization_v": {
         "resource1": None,
         "resource2": None,
-        "dataset1": None,
-        "dataset2": None,
+        "dataset1": "resource1",
+        "dataset2": "resource2",
         "data_type1": "resource1",
         "data_type2": "resource2",
     },
     "coloc_credsets_v": {
         "resource": None,
-        "dataset": None,
+        "dataset": "resource",
         "data_type": "resource",
     },
     "exome_variant_results_v": {
         "resource": None,
-        "dataset": None,
+        "dataset": "resource",
         "annotation": "resource",
     },
     "gene_burden_results_v": {
         "resource": None,
-        "dataset": None,
+        "dataset": "resource",
         "annotation": "resource",
     },
 }
@@ -175,6 +439,63 @@ def _get_categorical_values(view_name: str) -> dict[str, Any]:
     return result
 
 
+def _compact_categorical_values(cat_values: dict[str, Any]) -> dict[str, Any]:
+    """Collapse collection resources (e.g. qtdNNNNNN) into summaries.
+
+    Keeps named resources inline and replaces hundreds of collection IDs
+    with a compact description, reducing schema size dramatically.
+    """
+    result: dict[str, Any] = {}
+    for key, values in cat_values.items():
+        if isinstance(values, list):
+            # flat allowed_values list — separate named vs collection
+            named = []
+            collections: dict[str, int] = {}
+            for v in values:
+                matched = False
+                for prefix in _COLLECTION_RESOURCE_PREFIXES:
+                    if v.lower().startswith(prefix):
+                        collections[prefix] = collections.get(prefix, 0) + 1
+                        matched = True
+                        break
+                if not matched:
+                    named.append(v)
+            if collections:
+                result[key] = named
+                for prefix, count in collections.items():
+                    meta = _COLLECTION_RESOURCE_PREFIXES[prefix]
+                    result.setdefault("collection_resources", {})[meta["label"]] = {
+                        "count": count,
+                        "pattern": f"{prefix}NNNNNN (e.g. {prefix}000001)",
+                        "description": meta["description"],
+                        "data_types": meta.get("data_types", ""),
+                    }
+            else:
+                result[key] = values
+        elif isinstance(values, dict):
+            # grouped allowed_values_by_X — keep only named resources
+            compacted = {}
+            collection_types: set[str] = set()
+            for group_key, group_vals in values.items():
+                is_collection = any(
+                    group_key.lower().startswith(prefix)
+                    for prefix in _COLLECTION_RESOURCE_PREFIXES
+                )
+                if is_collection:
+                    for v in group_vals:
+                        collection_types.add(v)
+                else:
+                    compacted[group_key] = group_vals
+            if collection_types:
+                compacted["_eqtl_catalogue_resources"] = (
+                    f"All eQTL Catalogue (qtdNNNNNN) resources have data_types: {sorted(collection_types)}"
+                )
+            result[key] = compacted
+        else:
+            result[key] = values
+    return result
+
+
 class QueryRequest(BaseModel):
     """SQL query request."""
 
@@ -200,11 +521,13 @@ class TableInfo(BaseModel):
     description: str
     row_count: int
     columns: list[dict[str, Any]]
+    examples: list[dict[str, str]] = []
 
 
 class SchemaResponse(BaseModel):
     """Database schema response."""
 
+    resources: dict[str, Any] = {}
     tables: list[TableInfo]
 
 
@@ -228,18 +551,39 @@ async def health_check():
 
 
 @app.get("/schema", response_model=SchemaResponse)
-async def get_schema():
-    """Get database schema information."""
+async def get_schema(table: str | None = None):
+    """Get database schema information. Optionally filter to a single table."""
+    if table and table not in VIEWS:
+        resolved = _BASE_TABLES.get(table)
+        if resolved:
+            table = resolved
+        else:
+            raise HTTPException(status_code=404, detail=f"Unknown table: {table}. Available: {VIEWS}")
+
+    views_to_fetch = [table] if table else VIEWS
     tables = []
 
-    for table_name in VIEWS:
+    for table_name in views_to_fetch:
         table_ref = f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
         try:
-            table = bq_client.get_table(table_ref)
+            table_meta = bq_client.get_table(table_ref)
             overrides = _COLUMN_DESCRIPTIONS.get(table_name, {})
-            cat_values = _get_categorical_values(table_name)
+            raw_cat_values = _get_categorical_values(table_name)
+            cat_values = _compact_categorical_values(raw_cat_values)
+
+            # get row count from base table (views report 0)
+            row_count = 0
+            try:
+                base_table = table_name.removesuffix("_v")
+                base_ref = f"{PROJECT_ID}.{DATASET_ID}.{base_table}"
+                row_count = bq_client.get_table(base_ref).num_rows or 0
+            except Exception:
+                pass
+
+            # build column list with collection_resources pulled out to table level
+            collection_resources = cat_values.pop("collection_resources", None)
             columns: list[dict[str, Any]] = []
-            for field in table.schema:
+            for field in table_meta.schema:
                 col: dict[str, Any] = {
                     "name": field.name,
                     "type": field.field_type,
@@ -256,18 +600,25 @@ async def get_schema():
                         grouped_key
                     ]
                 columns.append(col)
-            tables.append(
-                TableInfo(
-                    name=table_name,
-                    description=table.description or "",
-                    row_count=table.num_rows,
-                    columns=columns,
-                )
+
+            table_info = TableInfo(
+                name=table_name,
+                description=_TABLE_DESCRIPTIONS.get(table_name, table_meta.description or ""),
+                row_count=row_count,
+                columns=columns,
+                examples=_TABLE_EXAMPLES.get(table_name, []),
             )
+            # attach collection_resources as extra field on the dict
+            table_dict = table_info.model_dump()
+            if collection_resources:
+                table_dict["collection_resources"] = collection_resources
+            tables.append(table_dict)
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning(f"Could not get schema for {table_name}: {e}")
 
-    return SchemaResponse(tables=tables)
+    return {"resources": _RESOURCE_METADATA, "tables": tables}
 
 
 @app.post("/query", response_model=QueryResponse)
