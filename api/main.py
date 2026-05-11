@@ -383,6 +383,25 @@ _CATEGORICAL_COLUMNS: dict[str, dict[str, str | None]] = {
     },
 }
 
+# override hardcoded dicts with YAML-loaded versions when available
+try:
+    from api.yaml_loader import load_all as _load_yaml_config
+except ImportError:
+    from yaml_loader import load_all as _load_yaml_config
+
+_yaml_config = _load_yaml_config()
+if _yaml_config is not None:
+    _RESOURCE_METADATA = _yaml_config["resource_metadata"]
+    _COLLECTION_RESOURCE_PREFIXES = _yaml_config["collection_resource_prefixes"]
+    _TABLE_DESCRIPTIONS = _yaml_config["table_descriptions"]
+    _COLUMN_DESCRIPTIONS = _yaml_config["column_descriptions"]
+    _TABLE_EXAMPLES = _yaml_config["table_examples"]
+    _CATEGORICAL_COLUMNS = _yaml_config["categorical_columns"]
+    logger.info("Loaded dataset config from YAML (%d resources, %d tables)",
+                len(_RESOURCE_METADATA), len(_TABLE_DESCRIPTIONS))
+else:
+    logger.info("Using hardcoded dataset config (YAML not available)")
+
 _VALUES_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _VALUES_CACHE_TTL_SECONDS = 3600
 

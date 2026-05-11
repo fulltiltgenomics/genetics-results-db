@@ -289,6 +289,7 @@ Configuration via environment variables:
 | MAX_ROWS | 100000 | Maximum rows returned per query |
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
 | PORT | 8080 | API server port |
+| DATASETS_CONFIG_PATH | ./configs/datasets.yaml | Path to shared datasets YAML config |
 
 ## Project Structure
 
@@ -312,9 +313,13 @@ genetics-results-db/
 │   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses)
 │   ├── load_exome_data.sh     # Batch load Genebass exome variant + gene burden results
 │   ├── load_gene_burden_extra.sh # Append additional gene burden results (BipEx, etc.)
-│   └── deploy.sh              # Deploy API to Cloud Run
+│   ├── deploy.sh              # Deploy API to Cloud Run
+│   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
+├── configs/
+│   └── datasets.yaml          # Shared dataset/resource config (synced from suite repo)
 ├── api/
-│   └── main.py                # FastAPI application
+│   ├── main.py                # FastAPI application
+│   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py
 ├── docs/
 │   └── project-spec.md        # This document
 ├── pyproject.toml             # Python project metadata and dependencies
