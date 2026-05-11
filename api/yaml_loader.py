@@ -1,9 +1,8 @@
 """
 Load dataset/resource/table metadata from the shared datasets.yaml config.
 
-Produces the same data structures that are hardcoded in main.py, enabling
-a single source of truth across services. Falls back gracefully if the
-YAML file is missing so the hardcoded dicts in main.py still work.
+Produces the same data structures previously hardcoded in main.py, enabling
+a single source of truth across services.
 """
 
 import logging
