@@ -30,12 +30,21 @@ class _GCPJsonFormatter(logging.Formatter):
     }
 
     def format(self, record: logging.LogRecord) -> str:
-        log_entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "severity": self.SEVERITY_MAP.get(record.levelno, "DEFAULT"),
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
+        msg = record.msg
+        if isinstance(msg, dict):
+            log_entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "severity": self.SEVERITY_MAP.get(record.levelno, "DEFAULT"),
+                "logger": record.name,
+                **msg,
+            }
+        else:
+            log_entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "severity": self.SEVERITY_MAP.get(record.levelno, "DEFAULT"),
+                "logger": record.name,
+                "message": record.getMessage(),
+            }
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry)
@@ -47,6 +56,8 @@ logging.root.handlers = [_handler]
 logging.root.setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
+for _name in ("uvicorn.access", "google", "urllib3", "asyncio"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 
 app = FastAPI(
     title="Genetics Results API",
@@ -244,6 +255,11 @@ class SchemaResponse(BaseModel):
     tables: list[TableInfo]
 
 
+def _estimate_bq_cost(bytes_processed: int) -> float:
+    """Estimate BigQuery on-demand query cost (USD). $6.25 per TiB."""
+    return round((bytes_processed / (1024**4)) * 6.25, 6)
+
+
 def sanitize_query(sql: str) -> str:
     """Basic query sanitization - ensure read-only operations."""
     sql_upper = sql.upper().strip()
@@ -266,6 +282,7 @@ async def health_check():
 @app.get("/schema", response_model=SchemaResponse)
 async def get_schema(table: str | None = None):
     """Get database schema information. Optionally filter to a single table."""
+    start_time = time.perf_counter()
     if table and table not in VIEWS:
         resolved = _BASE_TABLES.get(table)
         if resolved:
@@ -331,12 +348,20 @@ async def get_schema(table: str | None = None):
         except Exception as e:
             logger.warning(f"Could not get schema for {table_name}: {e}")
 
+    logger.info({
+        "message": "schema",
+        "log_type": "endpoint_access",
+        "table": table or "all",
+        "tables_returned": len(tables),
+        "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
+    })
     return {"resources": _RESOURCE_METADATA, "tables": tables}
 
 
 @app.post("/query", response_model=QueryResponse)
 async def execute_query(request: QueryRequest):
     """Execute a SQL query against the genetics database."""
+    start_time = time.perf_counter()
     sql = sanitize_query(request.sql)
 
     # auto-qualify table names and redirect base table names to views
@@ -360,11 +385,22 @@ async def execute_query(request: QueryRequest):
         query_job = bq_client.query(sql, job_config=job_config)
 
         if request.dry_run:
+            bytes_processed = query_job.total_bytes_processed
+            logger.info({
+                "message": "query",
+                "log_type": "endpoint_access",
+                "sql": request.sql,
+                "dry_run": True,
+                "total_rows": 0,
+                "bytes_processed": bytes_processed,
+                "estimated_cost_usd": _estimate_bq_cost(bytes_processed),
+                "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
+            })
             return QueryResponse(
                 columns=[],
                 rows=[],
                 total_rows=0,
-                bytes_processed=query_job.total_bytes_processed,
+                bytes_processed=bytes_processed,
                 truncated=False,
             )
 
@@ -377,12 +413,25 @@ async def execute_query(request: QueryRequest):
                 break
             rows.append([_serialize_value(v) for v in row.values()])
 
+        bytes_processed = query_job.total_bytes_processed
+        total_rows = results.total_rows
+        logger.info({
+            "message": "query",
+            "log_type": "endpoint_access",
+            "sql": request.sql,
+            "dry_run": False,
+            "total_rows": total_rows,
+            "rows_returned": len(rows),
+            "bytes_processed": bytes_processed,
+            "estimated_cost_usd": _estimate_bq_cost(bytes_processed),
+            "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
+        })
         return QueryResponse(
             columns=columns,
             rows=rows,
-            total_rows=results.total_rows,
-            bytes_processed=query_job.total_bytes_processed,
-            truncated=results.total_rows > request.max_rows,
+            total_rows=total_rows,
+            bytes_processed=bytes_processed,
+            truncated=total_rows > request.max_rows,
         )
 
     except BadRequest as e:
@@ -406,6 +455,7 @@ def _serialize_value(value: Any) -> Any:
 @app.get("/tables/{table_name}/sample")
 async def get_sample(table_name: str, limit: int = 10):
     """Get sample rows from a table."""
+    start_time = time.perf_counter()
     # accept both view names and base table names
     resolved = _BASE_TABLES.get(table_name, table_name)
     if resolved not in VIEWS:
@@ -420,12 +470,20 @@ async def get_sample(table_name: str, limit: int = 10):
     columns = [field.name for field in results.schema]
     rows = [[_serialize_value(v) for v in row.values()] for row in results]
 
+    logger.info({
+        "message": "sample",
+        "log_type": "endpoint_access",
+        "table": resolved,
+        "rows_returned": len(rows),
+        "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
+    })
     return {"columns": columns, "rows": rows}
 
 
 @app.get("/stats")
 async def get_stats():
     """Get summary statistics for the database."""
+    start_time = time.perf_counter()
     stats = {}
 
     # row counts
@@ -458,6 +516,11 @@ async def get_stats():
     except Exception as e:
         logger.warning(f"Could not get credible sets breakdown: {e}")
 
+    logger.info({
+        "message": "stats",
+        "log_type": "endpoint_access",
+        "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
+    })
     return stats
 
 

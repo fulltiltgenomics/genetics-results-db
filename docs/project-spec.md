@@ -257,6 +257,17 @@ Example:
 
 Values are computed by querying `SELECT DISTINCT` on each view and cached in-process for one hour. New datasets show up automatically after the cache expires.
 
+### Logging
+
+Structured JSON logging to stdout, compatible with GCP Cloud Logging. Each endpoint (except `/health`) emits one log line per request with:
+
+- `message`: endpoint name (query, schema, sample, stats)
+- `log_type`: "endpoint_access"
+- `duration_ms`: request duration in milliseconds
+- Endpoint-specific fields: `sql`, `dry_run`, `total_rows`, `rows_returned`, `bytes_processed`, `estimated_cost_usd` (for `/query`); `table`, `tables_returned` (for `/schema`); `table`, `rows_returned` (for `/sample`)
+
+BigQuery cost is estimated at $6.25 per TiB (on-demand pricing). Noisy loggers (uvicorn.access, google, urllib3, asyncio) are suppressed to WARNING level.
+
 ### Security
 
 - Write operations blocked (INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE, MERGE)
