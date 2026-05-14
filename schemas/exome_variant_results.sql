@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS `genetics_results.exome_variant_results`
   ac INT64 OPTIONS(description="Allele count"),
   an INT64 OPTIONS(description="Allele number"),
   heritability FLOAT64 OPTIONS(description="Heritability estimate"),
+  n_cases INT64 OPTIONS(description="Number of cases"),
+  n_controls INT64 OPTIONS(description="Number of controls"),
   trait STRING NOT NULL OPTIONS(description="Trait identifier")
 )
 PARTITION BY RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))

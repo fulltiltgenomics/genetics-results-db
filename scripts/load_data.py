@@ -109,6 +109,8 @@ SCHEMAS = {
         bigquery.SchemaField("ac", "INT64"),
         bigquery.SchemaField("an", "INT64"),
         bigquery.SchemaField("heritability", "FLOAT64"),
+        bigquery.SchemaField("n_cases", "INT64"),
+        bigquery.SchemaField("n_controls", "INT64"),
         bigquery.SchemaField("trait", "STRING", mode="REQUIRED"),
     ],
     # column order must match TSV file exactly
