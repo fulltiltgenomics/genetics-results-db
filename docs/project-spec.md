@@ -139,11 +139,11 @@ Variants belonging to colocalized credible sets.
 
 ### exome_variant_results
 
-Variant-level association results from UKBB exome sequencing (GeneBASS). Filtered for -log10(p-value) >= e.g. 4.
+Variant-level association results from exome sequencing studies (GeneBASS, IBD exomes). GeneBASS is filtered for -log10(p-value) >= 4; IBD contains only exome-wide significant variants (p < 3e-7 after conditional analysis) and LD-curated remaining (p < 5e-6).
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| dataset | STRING | Yes | Source dataset (genebass) |
+| dataset | STRING | Yes | Source dataset (genebass, IBD_exome_2026) |
 | chr | INT64 | Yes | Chromosome |
 | pos | INT64 | Yes | Position |
 | ref | STRING | Yes | Reference allele |
@@ -159,6 +159,8 @@ Variant-level association results from UKBB exome sequencing (GeneBASS). Filtere
 | ac | INT64 | No | Allele count |
 | an | INT64 | No | Allele number |
 | heritability | FLOAT64 | No | Heritability estimate |
+| n_cases | INT64 | No | Number of cases (IBD data only, NULL for genebass) |
+| n_controls | INT64 | No | Number of controls (IBD data only, NULL for genebass) |
 | trait | STRING | Yes | Trait identifier |
 
 ### gene_burden_results
@@ -322,7 +324,7 @@ genetics-results-db/
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_all_data.sh       # Batch load credible sets and colocalization data
 │   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses)
-│   ├── load_exome_data.sh     # Batch load Genebass exome variant + gene burden results
+│   ├── load_exome_data.sh     # Batch load exome variant (genebass + IBD) + gene burden results
 │   ├── load_gene_burden_extra.sh # Append additional gene burden results (BipEx, etc.)
 │   ├── deploy.sh              # Deploy API to Cloud Run
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml

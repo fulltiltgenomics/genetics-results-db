@@ -91,8 +91,28 @@ SCHEMAS = {
         bigquery.SchemaField("pip", "FLOAT64"),
         bigquery.SchemaField("cs_id", "STRING"),
     ],
-    # column order must match TSV file exactly
+    # column order must match TSV file exactly — genebass files lack n_cases/n_controls
     "exome_variant_results": [
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("gene", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("annotation", "STRING"),
+        bigquery.SchemaField("mlog10p", "FLOAT64"),
+        bigquery.SchemaField("beta", "FLOAT64"),
+        bigquery.SchemaField("se", "FLOAT64"),
+        bigquery.SchemaField("af_overall", "FLOAT64"),
+        bigquery.SchemaField("af_cases", "FLOAT64"),
+        bigquery.SchemaField("af_controls", "FLOAT64"),
+        bigquery.SchemaField("ac", "INT64"),
+        bigquery.SchemaField("an", "INT64"),
+        bigquery.SchemaField("heritability", "FLOAT64"),
+        bigquery.SchemaField("trait", "STRING", mode="REQUIRED"),
+    ],
+    # IBD exome files include n_cases/n_controls between heritability and trait
+    "exome_variant_results_with_counts": [
         bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
         bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
@@ -172,7 +192,8 @@ def main():
     parser = argparse.ArgumentParser(description="Load genetics data from GCS into BigQuery")
     parser.add_argument("--project", required=True, help="GCP project ID")
     parser.add_argument("--dataset", default="genetics_results", help="BigQuery dataset ID")
-    parser.add_argument("--table", required=True, choices=list(SCHEMAS.keys()), help="Target table")
+    parser.add_argument("--table", required=True, help="Target table")
+    parser.add_argument("--schema", choices=list(SCHEMAS.keys()), help="Schema key (defaults to --table value)")
     parser.add_argument("--gcs-uri", required=True, help="GCS URI (gs://bucket/path/*.tsv.gz)")
     parser.add_argument(
         "--write-disposition",
@@ -184,6 +205,10 @@ def main():
 
     args = parser.parse_args()
 
+    schema_key = args.schema or args.table
+    if schema_key not in SCHEMAS:
+        parser.error(f"Unknown schema '{schema_key}'. Must be one of {list(SCHEMAS.keys())}")
+
     client = bigquery.Client(project=args.project)
     table_id = f"{args.project}.{args.dataset}.{args.table}"
 
@@ -191,7 +216,7 @@ def main():
         client,
         args.gcs_uri,
         table_id,
-        args.table,
+        schema_key,
         args.write_disposition,
         args.skip_rows,
     )
