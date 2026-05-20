@@ -30,27 +30,32 @@ CREDSET_FILES=(
 )
 
 echo ""
+ts "=== Deleting existing credible_sets rows owned by this script ==="
+# Surgical DELETE keeps rows loaded by other scripts (e.g. load_pseudo.sh's
+# pseudo CS datasets). When adding a dataset to CREDSET_FILES above, add the
+# matching dataset value here too.
+bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
+  "DELETE FROM \`${PROJECT_ID}.${DATASET_ID}.credible_sets\`
+   WHERE dataset IN ('FinnGen_R13', 'FinnGen_kanta', 'FinnGen_drugs',
+                     'FinnGen_Olink', 'UKB_PPP', 'FinnGen_snRNAseq',
+                     'FinnGen_ATACseq', 'Open_Targets_25.12')
+      OR dataset LIKE 'QTD%'"
+ts "Done"
+
+echo ""
 ts "=== Loading credible sets ==="
-first_credset=true
 for gcs_uri in "${CREDSET_FILES[@]}"; do
   if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
     ts "ERROR: ${gcs_uri} not found"
     exit 1
   fi
   ts "Loading ${gcs_uri}..."
-  # truncate on first file, append on subsequent
-  if [ "$first_credset" = true ]; then
-    disposition="WRITE_TRUNCATE"
-    first_credset=false
-  else
-    disposition="WRITE_APPEND"
-  fi
   python3 "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table credible_sets \
     --gcs-uri "${gcs_uri}" \
-    --write-disposition "${disposition}"
+    --write-disposition "WRITE_APPEND"
 done
 
 # colocalization files
