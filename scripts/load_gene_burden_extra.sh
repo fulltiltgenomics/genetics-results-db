@@ -28,17 +28,17 @@ GENE_BURDEN_FILES=(
 echo ""
 ts "=== Appending gene burden results ==="
 for gcs_uri in "${GENE_BURDEN_FILES[@]}"; do
-  if gsutil -q stat "${gcs_uri}" 2>/dev/null; then
-    ts "Loading ${gcs_uri}..."
-    python3 "${SCRIPT_DIR}/load_data.py" \
-      --project "${PROJECT_ID}" \
-      --dataset "${DATASET_ID}" \
-      --table gene_burden_results \
-      --gcs-uri "${gcs_uri}" \
-      --write-disposition WRITE_APPEND
-  else
-    ts "Skipping ${gcs_uri} (not found)"
+  if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
+    ts "ERROR: ${gcs_uri} not found"
+    exit 1
   fi
+  ts "Loading ${gcs_uri}..."
+  python3 "${SCRIPT_DIR}/load_data.py" \
+    --project "${PROJECT_ID}" \
+    --dataset "${DATASET_ID}" \
+    --table gene_burden_results \
+    --gcs-uri "${gcs_uri}" \
+    --write-disposition WRITE_APPEND
 done
 
 echo ""

@@ -48,8 +48,14 @@ def rules_for_view(rules, view_name):
 
 
 def is_like_pattern(pattern):
-    """True if the pattern contains SQL LIKE wildcards (% or _)."""
-    return "%" in pattern or "_" in pattern
+    """True if the pattern uses SQL LIKE wildcards.
+
+    Only `%` is treated as a wildcard marker. Bare `_` is a literal here —
+    using LIKE would turn it into a 1-char wildcard and broaden the match
+    (e.g. `LIKE 'IBD_exome_2026'` would also match `IBDXexomeX2026`).
+    Authors who need a 1-char wildcard should write `%` instead.
+    """
+    return "%" in pattern
 
 
 def generate_case_fragment(rules, dataset_col="dataset", indent=2):

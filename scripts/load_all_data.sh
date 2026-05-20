@@ -33,24 +33,24 @@ echo ""
 ts "=== Loading credible sets ==="
 first_credset=true
 for gcs_uri in "${CREDSET_FILES[@]}"; do
-  if gsutil -q stat "${gcs_uri}" 2>/dev/null; then
-    ts "Loading ${gcs_uri}..."
-    # truncate on first file, append on subsequent
-    if [ "$first_credset" = true ]; then
-      disposition="WRITE_TRUNCATE"
-      first_credset=false
-    else
-      disposition="WRITE_APPEND"
-    fi
-    python3 "${SCRIPT_DIR}/load_data.py" \
-      --project "${PROJECT_ID}" \
-      --dataset "${DATASET_ID}" \
-      --table credible_sets \
-      --gcs-uri "${gcs_uri}" \
-      --write-disposition "${disposition}"
-  else
-    ts "Skipping ${gcs_uri} (not found)"
+  if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
+    ts "ERROR: ${gcs_uri} not found"
+    exit 1
   fi
+  ts "Loading ${gcs_uri}..."
+  # truncate on first file, append on subsequent
+  if [ "$first_credset" = true ]; then
+    disposition="WRITE_TRUNCATE"
+    first_credset=false
+  else
+    disposition="WRITE_APPEND"
+  fi
+  python3 "${SCRIPT_DIR}/load_data.py" \
+    --project "${PROJECT_ID}" \
+    --dataset "${DATASET_ID}" \
+    --table credible_sets \
+    --gcs-uri "${gcs_uri}" \
+    --write-disposition "${disposition}"
 done
 
 # colocalization files
@@ -66,23 +66,23 @@ echo ""
 ts "=== Loading colocalization results ==="
 first_coloc=true
 for gcs_uri in "${COLOC_FILES[@]}"; do
-  if gsutil -q stat "${gcs_uri}" 2>/dev/null; then
-    ts "Loading ${gcs_uri}..."
-    if [ "$first_coloc" = true ]; then
-      disposition="WRITE_TRUNCATE"
-      first_coloc=false
-    else
-      disposition="WRITE_APPEND"
-    fi
-    python3 "${SCRIPT_DIR}/load_data.py" \
-      --project "${PROJECT_ID}" \
-      --dataset "${DATASET_ID}" \
-      --table colocalization \
-      --gcs-uri "${gcs_uri}" \
-      --write-disposition "${disposition}"
-  else
-    ts "Skipping ${gcs_uri} (not found)"
+  if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
+    ts "ERROR: ${gcs_uri} not found"
+    exit 1
   fi
+  ts "Loading ${gcs_uri}..."
+  if [ "$first_coloc" = true ]; then
+    disposition="WRITE_TRUNCATE"
+    first_coloc=false
+  else
+    disposition="WRITE_APPEND"
+  fi
+  python3 "${SCRIPT_DIR}/load_data.py" \
+    --project "${PROJECT_ID}" \
+    --dataset "${DATASET_ID}" \
+    --table colocalization \
+    --gcs-uri "${gcs_uri}" \
+    --write-disposition "${disposition}"
 done
 
 # coloc credsets files
@@ -98,23 +98,23 @@ echo ""
 ts "=== Loading coloc credsets ==="
 first_coloc_credset=true
 for gcs_uri in "${COLOC_CREDSET_FILES[@]}"; do
-  if gsutil -q stat "${gcs_uri}" 2>/dev/null; then
-    ts "Loading ${gcs_uri}..."
-    if [ "$first_coloc_credset" = true ]; then
-      disposition="WRITE_TRUNCATE"
-      first_coloc_credset=false
-    else
-      disposition="WRITE_APPEND"
-    fi
-    python3 "${SCRIPT_DIR}/load_data.py" \
-      --project "${PROJECT_ID}" \
-      --dataset "${DATASET_ID}" \
-      --table coloc_credsets \
-      --gcs-uri "${gcs_uri}" \
-      --write-disposition "${disposition}"
-  else
-    ts "Skipping ${gcs_uri} (not found)"
+  if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
+    ts "ERROR: ${gcs_uri} not found"
+    exit 1
   fi
+  ts "Loading ${gcs_uri}..."
+  if [ "$first_coloc_credset" = true ]; then
+    disposition="WRITE_TRUNCATE"
+    first_coloc_credset=false
+  else
+    disposition="WRITE_APPEND"
+  fi
+  python3 "${SCRIPT_DIR}/load_data.py" \
+    --project "${PROJECT_ID}" \
+    --dataset "${DATASET_ID}" \
+    --table coloc_credsets \
+    --gcs-uri "${gcs_uri}" \
+    --write-disposition "${disposition}"
 done
 
 echo ""

@@ -323,7 +323,7 @@ genetics-results-db/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_all_data.sh       # Batch load credible sets and colocalization data
-│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses)
+│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses, COVID-19 HGI)
 │   ├── load_exome_data.sh     # Batch load exome variant (genebass + IBD) + gene burden results
 │   ├── load_gene_burden_extra.sh # Append additional gene burden results (BipEx, etc.)
 │   ├── deploy.sh              # Deploy API to Cloud Run
@@ -362,10 +362,11 @@ genetics-results-db/
    ./scripts/load_all_data.sh
    ```
 
-3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets):
+3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus COVID-19 HGI pseudo credible sets):
    ```bash
    ./scripts/load_pseudo.sh
    ```
+   The script reads `GCS_BUCKET` (default `finngen-commons`) and `GCS_PREFIX` (default `results_api_data/`). For the daly-finngenie bucket layout where credible_sets live at the bucket root, override with `GCS_BUCKET=daly-genetics-results GCS_PREFIX=""`.
 
 4. **Load exome results data from GCS**:
    ```bash
