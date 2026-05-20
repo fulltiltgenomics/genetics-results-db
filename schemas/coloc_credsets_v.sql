@@ -9,6 +9,7 @@ SELECT
     WHEN dataset LIKE 'FinnGen%' THEN 'finngen'
     WHEN dataset LIKE 'UKB%' THEN 'ukbb'
     WHEN dataset LIKE 'Open_Targets%' THEN 'open_targets'
+    WHEN dataset LIKE 'COVID19_HGI%' THEN 'covid_hgi'
     ELSE LOWER(dataset)
   END AS resource
 FROM `genetics_results.coloc_credsets`;
