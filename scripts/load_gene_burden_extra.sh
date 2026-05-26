@@ -1,5 +1,5 @@
 #!/bin/bash
-# Append additional gene burden test results (e.g. BipEx) to gene_burden_results.
+# Append additional gene burden test results (BipEx, IBD, SCHEMA2) to gene_burden_results.
 # Run after load_exome_data.sh, which loads Genebass and truncates the table.
 
 set -euo pipefail
@@ -18,11 +18,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ts "Appending gene burden results into ${PROJECT_ID}.${DATASET_ID}.gene_burden_results"
 
 GENE_BURDEN_FILES=(
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/bipex/BipEx2_gene_results.munged.mlog10p_gt4.noflag.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_2026_CD_gene_results.munged.noflag.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_2026_IBD_gene_results.munged.noflag.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_2026_UC_gene_results.munged.noflag.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/schema/SCHEMA2_gene_results.munged.noflag.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/bipex/BipEx2_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/ibd/IBD_exome_CD_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/ibd/IBD_exome_IBD_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/ibd/IBD_exome_UC_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/schema/SCHEMA2_gene_results.munged.tsv.gz"
 )
 
 echo ""

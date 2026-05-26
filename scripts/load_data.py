@@ -91,7 +91,7 @@ SCHEMAS = {
         bigquery.SchemaField("pip", "FLOAT64"),
         bigquery.SchemaField("cs_id", "STRING"),
     ],
-    # column order must match TSV file exactly — genebass files lack n_cases/n_controls
+    # column order must match TSV file exactly
     "exome_variant_results": [
         bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
@@ -108,30 +108,10 @@ SCHEMAS = {
         bigquery.SchemaField("af_controls", "FLOAT64"),
         bigquery.SchemaField("ac", "INT64"),
         bigquery.SchemaField("an", "INT64"),
-        bigquery.SchemaField("heritability", "FLOAT64"),
-        bigquery.SchemaField("trait", "STRING", mode="REQUIRED"),
-    ],
-    # IBD exome files include n_cases/n_controls between heritability and trait
-    "exome_variant_results_with_counts": [
-        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
-        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
-        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("gene", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("annotation", "STRING"),
-        bigquery.SchemaField("mlog10p", "FLOAT64"),
-        bigquery.SchemaField("beta", "FLOAT64"),
-        bigquery.SchemaField("se", "FLOAT64"),
-        bigquery.SchemaField("af_overall", "FLOAT64"),
-        bigquery.SchemaField("af_cases", "FLOAT64"),
-        bigquery.SchemaField("af_controls", "FLOAT64"),
-        bigquery.SchemaField("ac", "INT64"),
-        bigquery.SchemaField("an", "INT64"),
-        bigquery.SchemaField("heritability", "FLOAT64"),
         bigquery.SchemaField("n_cases", "INT64"),
         bigquery.SchemaField("n_controls", "INT64"),
         bigquery.SchemaField("trait", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("trait_original", "STRING"),
     ],
     # column order must match TSV file exactly
     "gene_burden_results": [
@@ -144,17 +124,14 @@ SCHEMAS = {
         bigquery.SchemaField("gene_end_pos", "INT64", mode="REQUIRED"),
         bigquery.SchemaField("annotation", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("mlog10p_burden", "FLOAT64"),
-        bigquery.SchemaField("mlog10p_skat", "FLOAT64"),
-        bigquery.SchemaField("mlog10p_skato", "FLOAT64"),
         bigquery.SchemaField("beta", "FLOAT64"),
         bigquery.SchemaField("se", "FLOAT64"),
         bigquery.SchemaField("total_variants", "INT64"),
         bigquery.SchemaField("total_variants_pheno", "INT64"),
         bigquery.SchemaField("n_cases", "INT64"),
         bigquery.SchemaField("n_controls", "INT64"),
-        bigquery.SchemaField("description", "STRING"),
-        bigquery.SchemaField("coding_description", "STRING"),
-        bigquery.SchemaField("category", "STRING"),
+        bigquery.SchemaField("trait_original", "STRING"),
+        bigquery.SchemaField("flags", "STRING"),
     ],
 }
 

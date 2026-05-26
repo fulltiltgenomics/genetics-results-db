@@ -36,7 +36,7 @@ BigQuery Dataset
   ├── exome_variant_results (partitioned by chr, clustered by dataset, gene, trait)
   │   └── exome_variant_results_v (view: adds variant, resource columns)
   └── gene_burden_results (partitioned by chr, clustered by dataset, gene, trait)
-      └── gene_burden_results_v (view: adds resource column, hides mlog10p_skat/mlog10p_skato)
+      └── gene_burden_results_v (view: adds resource column)
       ↓
 API (FastAPI) — exposes only views, not underlying tables
       ↓
@@ -139,17 +139,17 @@ Variants belonging to colocalized credible sets.
 
 ### exome_variant_results
 
-Variant-level association results from exome sequencing studies (GeneBASS, IBD exomes). GeneBASS is filtered for -log10(p-value) >= 4; IBD contains only exome-wide significant variants (p < 3e-7 after conditional analysis) and LD-curated remaining (p < 5e-6).
+Variant-level association results from exome sequencing studies (GeneBASS, IBD exome, SCHEMA2). All filtered to mlog10p > 4. Data files are in `exome_results4/` on GCS.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| dataset | STRING | Yes | Source dataset (genebass, IBD_exome_2026) |
+| dataset | STRING | Yes | Source dataset (genebass, IBD_exome, SCHEMA2) |
 | chr | INT64 | Yes | Chromosome |
 | pos | INT64 | Yes | Position |
 | ref | STRING | Yes | Reference allele |
 | alt | STRING | Yes | Alternate allele |
 | gene | STRING | Yes | Gene symbol |
-| annotation | STRING | Yes | Variant annotation (LC, synonymous, missense, pLoF, etc.) |
+| annotation | STRING | No | Variant annotation (pLoF, missense, synonymous, splice_region_variant, etc.) |
 | mlog10p | FLOAT64 | No | -log10(p-value) |
 | beta | FLOAT64 | No | Effect size |
 | se | FLOAT64 | No | Standard error |
@@ -158,37 +158,34 @@ Variant-level association results from exome sequencing studies (GeneBASS, IBD e
 | af_controls | FLOAT64 | No | Allele frequency in controls |
 | ac | INT64 | No | Allele count |
 | an | INT64 | No | Allele number |
-| heritability | FLOAT64 | No | Heritability estimate |
-| n_cases | INT64 | No | Number of cases (IBD data only, NULL for genebass) |
-| n_controls | INT64 | No | Number of controls (IBD data only, NULL for genebass) |
+| n_cases | INT64 | No | Number of cases (may be NA) |
+| n_controls | INT64 | No | Number of controls (may be NA) |
 | trait | STRING | Yes | Trait identifier |
+| trait_original | STRING | No | Original trait name in the respective dataset |
 
 ### gene_burden_results
 
-Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx, IBD exomes, SCHEMA, etc.). Includes burden, SKAT, and SKAT-O tests. Filtered for -log10(p-value of any test) >= e.g. 4.
+Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA2). Data files are in `exome_results4/` on GCS.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| dataset | STRING | Yes | Source dataset (genebass, BipEx2, IBD_exome_2026, SCHEMA, SCHEMA2, ...) |
+| dataset | STRING | Yes | Source dataset (genebass, BipEx2, IBD_exome, SCHEMA2) |
 | trait | STRING | Yes | Trait identifier |
 | gene | STRING | Yes | Gene symbol |
 | gene_id | STRING | Yes | Ensembl gene ID |
 | chr | INT64 | Yes | Chromosome |
 | gene_start_pos | INT64 | Yes | Gene start position |
 | gene_end_pos | INT64 | Yes | Gene end position |
-| annotation | STRING | Yes | Annotation category (pLoF, missense, etc.) |
+| annotation | STRING | Yes | Annotation category (pLoF, nonsynonymous, etc.) |
 | mlog10p_burden | FLOAT64 | No | -log10(p-value) for burden test |
-| mlog10p_skat | FLOAT64 | No | -log10(p-value) for SKAT test (hidden from `gene_burden_results_v`) |
-| mlog10p_skato | FLOAT64 | No | -log10(p-value) for SKAT-O test (hidden from `gene_burden_results_v`) |
 | beta | FLOAT64 | No | Effect size |
 | se | FLOAT64 | No | Standard error |
 | total_variants | INT64 | No | Number of variants in gene |
 | total_variants_pheno | INT64 | No | Number of variants in gene for this trait |
 | n_cases | INT64 | No | Number of cases, or number of samples for quantitative traits |
 | n_controls | INT64 | No | Number of controls (NULL for quantitative traits) |
-| description | STRING | No | Trait description |
-| coding_description | STRING | No | Additional trait coding description |
-| category | STRING | No | Trait category |
+| trait_original | STRING | No | Original trait name in the respective dataset |
+| flags | STRING | No | Quality or analysis flags (NA if none) |
 
 ## Technical Implementation
 

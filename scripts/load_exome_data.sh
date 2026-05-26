@@ -1,5 +1,5 @@
 #!/bin/bash
-# Load exome results data from GCS into BigQuery (genebass + IBD)
+# Load exome results data from GCS into BigQuery (genebass + IBD + SCHEMA2)
 
 set -euo pipefail
 
@@ -15,24 +15,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ts "Loading exome data into ${PROJECT_ID}.${DATASET_ID}"
 
-# genebass exome variant results (no n_cases/n_controls columns)
-GENEBASS_VARIANT_FILES=(
-  "gs://${GCS_BUCKET}/results_api_data/exome_results/genebass/genebass_variant_results_mlog10p4.tsv.gz"
-)
-
-# IBD exome variant results (has n_cases/n_controls columns)
-IBD_VARIANT_FILES=(
-  "gs://${GCS_BUCKET}/results_api_data/exome_results/ibd/IBD_exome_2026_IBD_variant_results.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/exome_results/ibd/IBD_exome_2026_UC_variant_results.munged.tsv.gz"
-  "gs://${GCS_BUCKET}/results_api_data/exome_results/ibd/IBD_exome_2026_CD_variant_results.munged.tsv.gz"
+# all exome variant results files share the same schema
+EXOME_VARIANT_FILES=(
+  "gs://${GCS_BUCKET}/results_api_data/exome_results4/genebass/genebass_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/results_api_data/exome_results4/ibd/IBD_exome_IBD_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/results_api_data/exome_results4/ibd/IBD_exome_UC_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/results_api_data/exome_results4/ibd/IBD_exome_CD_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/results_api_data/exome_results4/schema/SCHEMA2_variant_results.munged.mlog10p_gt4.tsv.gz"
 )
 
 echo ""
 ts "=== Loading exome variant results ==="
 first_exome_variant=true
 
-# genebass files use the default schema (without n_cases/n_controls)
-for gcs_uri in "${GENEBASS_VARIANT_FILES[@]}"; do
+for gcs_uri in "${EXOME_VARIANT_FILES[@]}"; do
   if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
     ts "ERROR: ${gcs_uri} not found"
     exit 1
@@ -48,35 +44,13 @@ for gcs_uri in "${GENEBASS_VARIANT_FILES[@]}"; do
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table exome_variant_results \
-    --gcs-uri "${gcs_uri}" \
-    --write-disposition "${disposition}"
-done
-
-# IBD files use the _with_counts schema (includes n_cases/n_controls)
-for gcs_uri in "${IBD_VARIANT_FILES[@]}"; do
-  if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
-    ts "ERROR: ${gcs_uri} not found"
-    exit 1
-  fi
-  ts "Loading ${gcs_uri}..."
-  if [ "$first_exome_variant" = true ]; then
-    disposition="WRITE_TRUNCATE"
-    first_exome_variant=false
-  else
-    disposition="WRITE_APPEND"
-  fi
-  python3 "${SCRIPT_DIR}/load_data.py" \
-    --project "${PROJECT_ID}" \
-    --dataset "${DATASET_ID}" \
-    --table exome_variant_results \
-    --schema exome_variant_results_with_counts \
     --gcs-uri "${gcs_uri}" \
     --write-disposition "${disposition}"
 done
 
 # gene burden results files
 GENE_BURDEN_FILES=(
-  "gs://${GCS_BUCKET}/results_api_data/exome_results/genebass/gene_burden_results.tsv.gz"
+  "gs://${GCS_BUCKET}/results_api_data/exome_results4/genebass/genebass_gene_results.munged.tsv.gz"
 )
 
 echo ""
