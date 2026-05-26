@@ -1,5 +1,5 @@
 #!/bin/bash
-# Load all genetics results data from GCS into BigQuery
+# Load credible sets and colocalization data from GCS into BigQuery
 
 set -euo pipefail
 

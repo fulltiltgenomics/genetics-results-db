@@ -319,10 +319,11 @@ genetics-results-db/
 ├── scripts/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
-│   ├── load_all_data.sh       # Batch load credible sets and colocalization data
+│   ├── load_credsets_coloc.sh  # Load credible sets and colocalization data
 │   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses, COVID-19 HGI)
 │   ├── load_exome_data.sh     # Batch load exome variant (genebass + IBD) + gene burden results
 │   ├── load_gene_burden_extra.sh # Append additional gene burden results (BipEx, etc.)
+│   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── deploy.sh              # Deploy API to Cloud Run
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
@@ -356,7 +357,7 @@ genetics-results-db/
 
 2. **Load credible sets and colocalization data from GCS**:
    ```bash
-   ./scripts/load_all_data.sh
+   ./scripts/load_credsets_coloc.sh
    ```
 
 3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus COVID-19 HGI pseudo credible sets):

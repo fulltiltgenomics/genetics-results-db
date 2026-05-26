@@ -10,9 +10,11 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/setup_bigquery.sh](scripts/setup_bigquery.sh) creates the BigQuery dataset and tables
 
-[scripts/load_all_data.sh](scripts/load_all_data.sh) loads in credible sets and colocalization results
+[scripts/load_credsets_coloc.sh](scripts/load_credsets_coloc.sh) loads credible sets and colocalization results
 
-[scripts/load_exome_data.sh](scripts/load_exome_data.sh) loads in exome sequencing results
+[scripts/load_exome_data.sh](scripts/load_exome_data.sh) loads exome sequencing results
+
+[scripts/load_asm_qtl.sh](scripts/load_asm_qtl.sh) loads ASM-QTL (allele-specific methylation) results
 
 ## Server setup
 
