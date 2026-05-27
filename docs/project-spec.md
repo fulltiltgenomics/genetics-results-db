@@ -362,7 +362,7 @@ genetics-results-db/
    ./scripts/load_credsets_coloc.sh
    ```
 
-3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI, PGC SCZ/BIP, and GP2 PD pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
+3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
    ```bash
    ./scripts/load_pseudo.sh
    ```
