@@ -321,8 +321,10 @@ genetics-results-db/
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_credsets_coloc.sh  # Load credible sets and colocalization data
 │   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses, external EXT file: COVID-19 HGI + PGC + GP2)
-│   ├── load_exome_data.sh     # Batch load exome variant (genebass + IBD) + gene burden results
-│   ├── load_gene_burden_extra.sh # Append additional gene burden results (BipEx, etc.)
+│   ├── load_genebass_variants.sh    # Load GeneBASS exome variant results (truncates table)
+│   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results (truncates table)
+│   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD, SCHEMA2)
+│   ├── load_gene_burden_extra.sh    # Append additional gene burden results (BipEx, IBD, SCHEMA2)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── deploy.sh              # Deploy API to Cloud Run
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
@@ -366,13 +368,15 @@ genetics-results-db/
    ```
    The script reads `GCS_BUCKET` (default `finngen-commons`) and `GCS_PREFIX` (default `results_api_data/`). For the daly-finngenie bucket layout where credible_sets live at the bucket root, override with `GCS_BUCKET=daly-genetics-results GCS_PREFIX=""`.
 
-4. **Load exome results data from GCS**:
+4. **Load GeneBASS exome data from GCS** (truncates target tables):
    ```bash
-   ./scripts/load_exome_data.sh
+   ./scripts/load_genebass_variants.sh
+   ./scripts/load_genebass_gene.sh
    ```
 
-5. **Append additional gene burden results** (BipEx, etc.) on top of the Genebass load:
+5. **Append additional exome and gene burden results** (IBD, SCHEMA2, BipEx) on top of the GeneBASS load:
    ```bash
+   ./scripts/load_exome_variants_extra.sh
    ./scripts/load_gene_burden_extra.sh
    ```
 
