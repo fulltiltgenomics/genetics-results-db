@@ -320,7 +320,7 @@ genetics-results-db/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_credsets_coloc.sh  # Load credible sets and colocalization data
-│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses, COVID-19 HGI)
+│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses, external EXT file: COVID-19 HGI + PGC + GP2)
 │   ├── load_exome_data.sh     # Batch load exome variant (genebass + IBD) + gene burden results
 │   ├── load_gene_burden_extra.sh # Append additional gene burden results (BipEx, etc.)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
@@ -360,7 +360,7 @@ genetics-results-db/
    ./scripts/load_credsets_coloc.sh
    ```
 
-3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus COVID-19 HGI pseudo credible sets):
+3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI, PGC SCZ/BIP, and GP2 PD pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
    ```bash
    ./scripts/load_pseudo.sh
    ```
