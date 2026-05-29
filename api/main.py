@@ -248,11 +248,19 @@ class TableInfo(BaseModel):
     examples: list[dict[str, str]] = []
 
 
+class SchemaWarning(BaseModel):
+    """Per-view error encountered while building the schema response."""
+
+    view: str
+    error: str
+
+
 class SchemaResponse(BaseModel):
     """Database schema response."""
 
     resources: dict[str, Any] = {}
     tables: list[TableInfo]
+    warnings: list[SchemaWarning] = []
 
 
 def _estimate_bq_cost(bytes_processed: int) -> float:
@@ -292,6 +300,7 @@ async def get_schema(table: str | None = None):
 
     views_to_fetch = [table] if table else VIEWS
     tables = []
+    warnings: list[dict[str, str]] = []
 
     for table_name in views_to_fetch:
         table_ref = f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
@@ -347,15 +356,28 @@ async def get_schema(table: str | None = None):
             raise
         except Exception as e:
             logger.warning(f"Could not get schema for {table_name}: {e}")
+            warnings.append({"view": table_name, "error": f"{type(e).__name__}: {e}"})
 
     logger.info({
         "message": "schema",
         "log_type": "endpoint_access",
         "table": table or "all",
         "tables_returned": len(tables),
+        "warnings": len(warnings),
         "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
     })
-    return {"resources": _RESOURCE_METADATA, "tables": tables}
+
+    # surface total upstream failure rather than silently returning an empty list
+    if views_to_fetch and not tables:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "schema unavailable: no views could be loaded from BigQuery",
+                "warnings": warnings,
+            },
+        )
+
+    return {"resources": _RESOURCE_METADATA, "tables": tables, "warnings": warnings}
 
 
 @app.post("/query", response_model=QueryResponse)
