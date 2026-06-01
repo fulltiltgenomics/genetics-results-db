@@ -18,30 +18,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ts "Loading GeneBASS exome variant results into ${PROJECT_ID}.${DATASET_ID}.exome_variant_results"
 
 GENEBASS_VARIANT_FILES=(
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/genebass/genebass_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/genebass/genebass_variant_results_mlog10p4.tsv.gz"
 )
 
 echo ""
 ts "=== Loading GeneBASS exome variant results ==="
-first=true
+# Reset via TRUNCATE TABLE (DML) rather than a WRITE_TRUNCATE load: the latter
+# replaces the table schema and drops column descriptions the API depends on.
+# Requires the table to exist (run setup_bigquery.sh first).
+ts "Truncating exome_variant_results (preserves schema/descriptions)..."
+bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
+  "TRUNCATE TABLE \`${PROJECT_ID}.${DATASET_ID}.exome_variant_results\`"
 for gcs_uri in "${GENEBASS_VARIANT_FILES[@]}"; do
   if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
     ts "ERROR: ${gcs_uri} not found"
     exit 1
   fi
   ts "Loading ${gcs_uri}..."
-  if [ "$first" = true ]; then
-    disposition="WRITE_TRUNCATE"
-    first=false
-  else
-    disposition="WRITE_APPEND"
-  fi
   python3 "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table exome_variant_results \
     --gcs-uri "${gcs_uri}" \
-    --write-disposition "${disposition}"
+    --write-disposition WRITE_APPEND
 done
 
 echo ""

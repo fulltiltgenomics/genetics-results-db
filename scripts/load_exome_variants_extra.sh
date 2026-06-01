@@ -18,10 +18,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ts "Appending exome variant results into ${PROJECT_ID}.${DATASET_ID}.exome_variant_results"
 
 EXOME_VARIANT_FILES=(
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/ibd/IBD_exome_IBD_variant_results.munged.mlog10p_gt4.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/ibd/IBD_exome_UC_variant_results.munged.mlog10p_gt4.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/ibd/IBD_exome_CD_variant_results.munged.mlog10p_gt4.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results4/schema/SCHEMA2_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_IBD_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_UC_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_CD_variant_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/schema/SCHEMA2_variant_results.munged.mlog10p_gt4.tsv.gz"
 )
 
 echo ""

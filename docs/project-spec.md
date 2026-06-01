@@ -139,7 +139,7 @@ Variants belonging to colocalized credible sets.
 
 ### exome_variant_results
 
-Variant-level association results from exome sequencing studies (GeneBASS, IBD exome, SCHEMA2). All filtered to mlog10p > 4. Data files are in `exome_results4/` on GCS.
+Variant-level association results from exome sequencing studies (GeneBASS, IBD exome, SCHEMA2). All filtered to mlog10p > 4. Data files are in `exome_results/` on GCS.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
@@ -165,7 +165,7 @@ Variant-level association results from exome sequencing studies (GeneBASS, IBD e
 
 ### gene_burden_results
 
-Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA2). Data files are in `exome_results4/` on GCS.
+Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA2). All filtered to mlog10p_burden > 4. Data files are in `exome_results/` on GCS.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
