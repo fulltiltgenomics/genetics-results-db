@@ -35,8 +35,10 @@ BigQuery Dataset
   │   └── coloc_credsets_v (view: adds variant, resource columns)
   ├── exome_variant_results (partitioned by chr, clustered by dataset, gene, trait)
   │   └── exome_variant_results_v (view: adds variant, resource columns)
-  └── gene_burden_results (partitioned by chr, clustered by dataset, gene, trait)
-      └── gene_burden_results_v (view: adds resource column)
+  ├── gene_burden_results (partitioned by chr, clustered by dataset, gene, trait)
+  │   └── gene_burden_results_v (view: adds resource column)
+  └── gene_annotations (unpartitioned reference table, clustered by symbol)
+      └── gene_annotations_v (view: adds resource column)
       ↓
 API (FastAPI) — exposes only views, not underlying tables
       ↓
@@ -187,6 +189,34 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, 
 | trait_original | STRING | No | Original trait name in the respective dataset |
 | flags | STRING | No | Quality or analysis flags (NA if none) |
 
+### gene_annotations
+
+Whole-universe gene reference table: one row per HGNC gene, covering the full gene universe (not filtered to results). Built from the HGNC complete-set joined to GENCODE v49 GRCh38 coordinates, with full-lineage HGNC gene-group arrays. Coordinates use GRCh38 with chromosome X encoded as 23 (Y as 24, M as 25), matching the integer chromosome convention of the other views.
+
+This table is a `query_bigquery` surface only. Its primary purpose is enabling cis/trans QTL filtering, where gene coordinates are JOINed against `colocalization_v` (or `credible_sets_v`) inside BigQuery — a join that cannot be done through the specialized API tools — and any-group enumeration via the gene-group arrays. The mcp-server specialized tools (e.g. `get_gene_group_members`, `normalize_gene_symbols`) do NOT read this table; they call the genetics-results-api. The table is fed from the same HGNC source as that API, so the two stay consistent.
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| hgnc_id | STRING | No | HGNC ID (e.g. HGNC:5) |
+| symbol | STRING | No | HGNC approved gene symbol |
+| name | STRING | No | HGNC approved gene name |
+| prev_symbols | STRING | No | Previous HGNC symbols, pipe-delimited |
+| alias_symbols | STRING | No | Alias symbols, pipe-delimited |
+| ensembl_gene_id | STRING | No | Ensembl gene ID |
+| ncbi_gene_id | STRING | No | NCBI (Entrez) gene ID |
+| chr | INT64 | No | Chromosome (GRCh38; X encoded as 23) |
+| gene_start | INT64 | No | Gene start position (GRCh38, GENCODE) |
+| gene_end | INT64 | No | Gene end position (GRCh38, GENCODE) |
+| strand | STRING | No | Strand (+ or -) |
+| locus_type | STRING | No | HGNC locus type (e.g. gene with protein product) |
+| gene_group_ids | ARRAY\<INT64\> | No | Full-lineage HGNC gene-group IDs (leaf group plus all ancestors) |
+| gene_group_names | ARRAY\<STRING\> | No | Full-lineage HGNC gene-group names (leaf group plus all ancestors) |
+| gencode_version | STRING | No | GENCODE release used for coordinates (provenance) |
+| hgnc_version | STRING | No | HGNC complete-set version/date used (provenance) |
+| download_date | DATE | No | Date the source data was downloaded/built (provenance) |
+
+**Gene-group lineage.** `gene_group_ids` and `gene_group_names` are full-lineage arrays: each gene's leaf group(s) plus all ancestor groups in the HGNC hierarchy. The arrays are built from three HGNC-native CSV files — `hgnc_gene_has_family.csv` (gene → leaf group), `hgnc_hierarchy_closure.csv` (which is already transitive, expanding each child group to all of its ancestors), and `hgnc_family.csv` (group ID → name). Because the lineage is precomputed, membership in *any* group (leaf or ancestor) is queryable directly with `<group_id> IN UNNEST(gene_group_ids)`, with no recursive join needed.
+
 ## Technical Implementation
 
 ### BigQuery Configuration
@@ -315,7 +345,9 @@ genetics-results-db/
 │   ├── exome_variant_results.sql      # GeneBASS variant results table
 │   ├── exome_variant_results_v.sql    # View with variant and resource columns
 │   ├── gene_burden_results.sql        # GeneBASS gene burden results table
-│   └── gene_burden_results_v.sql      # View with resource column
+│   ├── gene_burden_results_v.sql      # View with resource column
+│   ├── gene_annotations.sql           # Whole-universe gene annotations table (HGNC + GENCODE)
+│   └── gene_annotations_v.sql         # View with resource column
 ├── scripts/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
@@ -326,6 +358,8 @@ genetics-results-db/
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD, SCHEMA2)
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results (BipEx, IBD, SCHEMA2)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
+│   ├── load_gene_annotations.sh   # Build + load the gene_annotations reference table (WRITE_TRUNCATE)
+│   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   ├── deploy.sh              # Deploy API to Cloud Run
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
@@ -380,7 +414,13 @@ genetics-results-db/
    ./scripts/load_gene_burden_extra.sh
    ```
 
-6. **Deploy API to Cloud Run** (optional):
+6. **Build and load the gene_annotations reference table** (manual, on-demand; full rebuild via `WRITE_TRUNCATE`):
+   ```bash
+   HGNC_VERSION=2026-06-01 ./scripts/load_gene_annotations.sh
+   ```
+   `build_gene_annotations.py` joins the HGNC complete-set, GENCODE v49 coordinates, and the three HGNC gene-group CSVs from GCS `mapping_files/` into a single NEWLINE_DELIMITED_JSON file (required to carry the `gene_group_ids`/`gene_group_names` REPEATED array columns, which the CSV loader cannot populate), which `load_data.py` then loads with `WRITE_TRUNCATE`. The provenance columns `gencode_version`, `hgnc_version`, and `download_date` are stamped at build time. This table has no streaming/incremental load; rerun the script to refresh.
+
+7. **Deploy API to Cloud Run** (optional):
    ```bash
    ./scripts/deploy.sh
    ```
@@ -420,6 +460,25 @@ WHERE mlog10p_burden > 5
 ORDER BY mlog10p_burden DESC
 LIMIT 100
 ```
+
+### Genes in a gene group (any-group enumeration with coordinates)
+```sql
+SELECT symbol, chr, gene_start, gene_end
+FROM gene_annotations_v
+WHERE 139 IN UNNEST(gene_group_ids)
+```
+Because `gene_group_ids` carries the full lineage, this matches genes whose leaf group *or* any ancestor group is 139.
+
+### cis-pQTL colocalizations (gene coordinates JOINed to colocalizations)
+```sql
+SELECT c.trait1, a.symbol, c.PP_H4_abf
+FROM gene_annotations_v a
+JOIN colocalization_v c ON c.trait2 = a.symbol
+WHERE c.data_type2 = 'pQTL'
+  AND SAFE_CAST(SPLIT(c.hit2, ':')[OFFSET(1)] AS INT64)
+      BETWEEN a.gene_start - 1000000 AND a.gene_end + 1000000
+```
+Filters to cis colocalizations (QTL lead variant within ±1 Mb of the gene). Dropping or inverting the position predicate gives trans signals.
 
 ## To Be Implemented
 
