@@ -54,18 +54,18 @@ Fine-mapped credible set variants from multiple genetics datasets.
 | dataset | STRING | Yes | Source dataset (FinnGen_R13, Open_Targets_25.12, etc.) |
 | data_type | STRING | Yes | GWAS, eQTL, pQTL, sQTL, caQTL |
 | trait | STRING | Yes | Phenotype/trait name |
-| trait_original | STRING | No | Original trait name |
+| trait_original | STRING | Yes | Original trait name |
 | cell_type | STRING | No | Cell/tissue type (null for GWAS) |
 | chr | INT64 | Yes | Chromosome |
 | pos | INT64 | Yes | Position |
 | ref | STRING | Yes | Reference allele |
 | alt | STRING | Yes | Alternate allele |
 | mlog10p | FLOAT64 | No | -log10(p-value) |
-| beta | FLOAT64 | No | Effect size |
+| beta | FLOAT64 | Yes | Effect size |
 | se | FLOAT64 | No | Standard error |
-| pip | FLOAT64 | No | Posterior inclusion probability |
-| cs_id | STRING | No | Credible set ID |
-| cs_size | INT64 | No | Credible set size |
+| pip | FLOAT64 | Yes | Posterior inclusion probability |
+| cs_id | STRING | Yes | Credible set ID |
+| cs_size | INT64 | Yes | Credible set size |
 | cs_min_r2 | FLOAT64 | No | Minimum R² between variants in credible set |
 | aaf | FLOAT64 | No | Alternate allele frequency |
 | maf | FLOAT64 | No | Minor allele frequency (view only, derived as LEAST(aaf, 1-aaf)) |
@@ -83,38 +83,38 @@ Colocalization analysis results between associations from different datasets.
 | data_type1 | STRING | Yes | First dataset type |
 | data_type2 | STRING | Yes | Second dataset type |
 | trait1 | STRING | Yes | First trait name |
-| trait1_original | STRING | No | First original trait name |
-| trait2 | STRING | Yes | Second trait name |
-| trait2_original | STRING | No | Second original trait name |
+| trait1_original | STRING | Yes | First original trait name |
+| trait2 | STRING | No | Second trait name |
+| trait2_original | STRING | Yes | Second original trait name |
 | cell_type1 | STRING | No | First cell/tissue type |
 | cell_type2 | STRING | No | Second cell/tissue type |
 | cs1_id | STRING | Yes | First credible set ID |
 | cs2_id | STRING | Yes | Second credible set ID |
-| hit1 | STRING | No | Lead variant in first credible set |
-| hit2 | STRING | No | Lead variant in second credible set |
-| hit1_beta | FLOAT64 | No | Effect size of lead variant in first set |
-| hit1_mlog10p | FLOAT64 | No | -log10(p-value) of lead variant in first set |
+| hit1 | STRING | Yes | Lead variant in first credible set |
+| hit2 | STRING | Yes | Lead variant in second credible set |
+| hit1_beta | FLOAT64 | Yes | Effect size of lead variant in first set |
+| hit1_mlog10p | FLOAT64 | Yes | -log10(p-value) of lead variant in first set |
 | hit2_beta | FLOAT64 | No | Effect size of lead variant in second set |
 | hit2_mlog10p | FLOAT64 | No | -log10(p-value) of lead variant in second set |
 | chr | INT64 | Yes | Chromosome |
-| region_start_min | INT64 | No | Region start position |
-| region_end_max | INT64 | No | Region end position |
-| PP_H0_abf | FLOAT64 | No | Posterior probability H0: no association in either |
-| PP_H1_abf | FLOAT64 | No | Posterior probability H1: association in dataset 1 only |
-| PP_H2_abf | FLOAT64 | No | Posterior probability H2: association in dataset 2 only |
-| PP_H3_abf | FLOAT64 | No | Posterior probability H3: both associated, different variants |
-| PP_H4_abf | FLOAT64 | No | Posterior probability H4: both associated, shared variant |
-| nsnps | INT64 | No | Number of SNPs in region |
-| nsnps1 | INT64 | No | Number of SNPs in first trait region |
-| nsnps2 | INT64 | No | Number of SNPs in second trait region |
-| cs1_log10bf | FLOAT64 | No | Log10 Bayes factor for first credible set |
-| cs2_log10bf | FLOAT64 | No | Log10 Bayes factor for second credible set |
+| region_start_min | INT64 | Yes | Region start position |
+| region_end_max | INT64 | Yes | Region end position |
+| PP_H0_abf | FLOAT64 | Yes | Posterior probability H0: no association in either |
+| PP_H1_abf | FLOAT64 | Yes | Posterior probability H1: association in dataset 1 only |
+| PP_H2_abf | FLOAT64 | Yes | Posterior probability H2: association in dataset 2 only |
+| PP_H3_abf | FLOAT64 | Yes | Posterior probability H3: both associated, different variants |
+| PP_H4_abf | FLOAT64 | Yes | Posterior probability H4: both associated, shared variant |
+| nsnps | INT64 | Yes | Number of SNPs in region |
+| nsnps1 | INT64 | Yes | Number of SNPs in first trait region |
+| nsnps2 | INT64 | Yes | Number of SNPs in second trait region |
+| cs1_log10bf | FLOAT64 | Yes | Log10 Bayes factor for first credible set |
+| cs2_log10bf | FLOAT64 | Yes | Log10 Bayes factor for second credible set |
 | clpp | FLOAT64 | No | Causal posterior probability |
 | clpa | FLOAT64 | No | Causal posterior agreement |
-| cs1_size | INT64 | No | First credible set size |
-| cs2_size | INT64 | No | Second credible set size |
-| cs_overlap | INT64 | No | Number of overlapping variants in the credible sets |
-| topInOverlap | STRING | No | Whether the top variant is in the credible set overlap |
+| cs1_size | INT64 | Yes | First credible set size |
+| cs2_size | INT64 | Yes | Second credible set size |
+| cs_overlap | INT64 | Yes | Number of overlapping variants in the credible sets |
+| topInOverlap | STRING | Yes | Whether the top variant is in the credible set overlap |
 
 ### coloc_credsets
 
@@ -125,7 +125,7 @@ Variants belonging to colocalized credible sets.
 | dataset | STRING | Yes | Source dataset |
 | data_type | STRING | Yes | Data type |
 | trait | STRING | Yes | Trait name |
-| trait_original | STRING | No | Original trait name |
+| trait_original | STRING | Yes | Original trait name |
 | cell_type | STRING | No | Cell/tissue type |
 | chr | INT64 | Yes | Chromosome |
 | pos | INT64 | Yes | Position |
@@ -134,8 +134,8 @@ Variants belonging to colocalized credible sets.
 | mlog10p | FLOAT64 | No | -log10(p-value) |
 | beta | FLOAT64 | No | Effect size |
 | se | FLOAT64 | No | Standard error |
-| pip | FLOAT64 | No | Posterior inclusion probability |
-| cs_id | STRING | No | Credible set ID |
+| pip | FLOAT64 | Yes | Posterior inclusion probability |
+| cs_id | STRING | Yes | Credible set ID |
 
 ### exome_variant_results
 
@@ -149,19 +149,19 @@ Variant-level association results from exome sequencing studies (GeneBASS, IBD e
 | ref | STRING | Yes | Reference allele |
 | alt | STRING | Yes | Alternate allele |
 | gene | STRING | Yes | Gene symbol |
-| annotation | STRING | No | Variant annotation (pLoF, missense, synonymous, splice_region_variant, etc.) |
-| mlog10p | FLOAT64 | No | -log10(p-value) |
-| beta | FLOAT64 | No | Effect size |
+| annotation | STRING | Yes | Variant annotation (pLoF, missense, synonymous, splice_region_variant, etc.) |
+| mlog10p | FLOAT64 | Yes | -log10(p-value) |
+| beta | FLOAT64 | Yes | Effect size |
 | se | FLOAT64 | No | Standard error |
-| af_overall | FLOAT64 | No | Allele frequency overall |
+| af_overall | FLOAT64 | Yes | Allele frequency overall |
 | af_cases | FLOAT64 | No | Allele frequency in cases |
 | af_controls | FLOAT64 | No | Allele frequency in controls |
-| ac | INT64 | No | Allele count |
+| ac | INT64 | Yes | Allele count |
 | an | INT64 | No | Allele number |
 | n_cases | INT64 | No | Number of cases (may be NA) |
 | n_controls | INT64 | No | Number of controls (may be NA) |
 | trait | STRING | Yes | Trait identifier |
-| trait_original | STRING | No | Original trait name in the respective dataset |
+| trait_original | STRING | Yes | Original trait name in the respective dataset |
 
 ### gene_burden_results
 
@@ -177,14 +177,14 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, 
 | gene_start_pos | INT64 | Yes | Gene start position |
 | gene_end_pos | INT64 | Yes | Gene end position |
 | annotation | STRING | Yes | Annotation category (pLoF, nonsynonymous, etc.) |
-| mlog10p_burden | FLOAT64 | No | -log10(p-value) for burden test |
-| beta | FLOAT64 | No | Effect size |
-| se | FLOAT64 | No | Standard error |
+| mlog10p_burden | FLOAT64 | Yes | -log10(p-value) for burden test |
+| beta | FLOAT64 | Yes | Effect size |
+| se | FLOAT64 | Yes | Standard error |
 | total_variants | INT64 | No | Number of variants in gene |
 | total_variants_pheno | INT64 | No | Number of variants in gene for this trait |
-| n_cases | INT64 | No | Number of cases, or number of samples for quantitative traits |
+| n_cases | INT64 | Yes | Number of cases, or number of samples for quantitative traits |
 | n_controls | INT64 | No | Number of controls (NULL for quantitative traits) |
-| trait_original | STRING | No | Original trait name in the respective dataset |
+| trait_original | STRING | Yes | Original trait name in the respective dataset |
 | flags | STRING | No | Quality or analysis flags (NA if none) |
 
 ## Technical Implementation
