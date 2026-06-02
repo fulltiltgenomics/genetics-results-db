@@ -14,7 +14,6 @@ into the target table with the constants filled in. The flag is repeatable.
 import argparse
 import sys
 import uuid
-from pathlib import Path
 from google.cloud import bigquery
 from google.cloud.bigquery import LoadJobConfig, SourceFormat, WriteDisposition
 
@@ -164,7 +163,33 @@ SCHEMAS = {
         bigquery.SchemaField("trait_original", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("flags", "STRING"),
     ],
+    # field order is irrelevant here: loaded from NEWLINE_DELIMITED_JSON (named fields),
+    # not positional CSV. gene_group_ids/names are REPEATED arrays, which CSV/TSV
+    # cannot carry — see JSON_SCHEMAS below.
+    "gene_annotations": [
+        bigquery.SchemaField("hgnc_id", "STRING"),
+        bigquery.SchemaField("symbol", "STRING"),
+        bigquery.SchemaField("name", "STRING"),
+        bigquery.SchemaField("prev_symbols", "STRING"),
+        bigquery.SchemaField("alias_symbols", "STRING"),
+        bigquery.SchemaField("ensembl_gene_id", "STRING"),
+        bigquery.SchemaField("ncbi_gene_id", "STRING"),
+        bigquery.SchemaField("chr", "INT64"),
+        bigquery.SchemaField("gene_start", "INT64"),
+        bigquery.SchemaField("gene_end", "INT64"),
+        bigquery.SchemaField("strand", "STRING"),
+        bigquery.SchemaField("locus_type", "STRING"),
+        bigquery.SchemaField("gene_group_ids", "INT64", mode="REPEATED"),
+        bigquery.SchemaField("gene_group_names", "STRING", mode="REPEATED"),
+        bigquery.SchemaField("gencode_version", "STRING"),
+        bigquery.SchemaField("hgnc_version", "STRING"),
+        bigquery.SchemaField("download_date", "DATE"),
+    ],
 }
+
+# tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
+# REPEATED/ARRAY columns, which the CSV loader cannot populate)
+JSON_SCHEMAS = {"gene_annotations"}
 
 
 def _coerce_const(value: str, bq_type: str):
@@ -202,17 +227,32 @@ def load_table(
     full_schema = SCHEMAS[table_type]
     const_columns = const_columns or {}
 
-    if not const_columns:
-        # original direct-load path
-        job_config = LoadJobConfig(
-            schema=full_schema,
-            source_format=SourceFormat.CSV,
-            field_delimiter="\t",
-            skip_leading_rows=skip_leading_rows,
-            write_disposition=getattr(WriteDisposition, write_disposition),
-            allow_quoted_newlines=True,
-            null_marker="NA",
+    if table_type in JSON_SCHEMAS and const_columns:
+        # const-column injection relies on a CSV staging table; it is not wired up
+        # for the JSON load path (no current JSON table needs it)
+        raise ValueError(
+            f"--const-column is not supported for JSON-loaded table '{table_type}'"
         )
+
+    if not const_columns:
+        # direct-load path: no constant columns to inject
+        if table_type in JSON_SCHEMAS:
+            # ARRAY/REPEATED columns require JSON; CSV/TSV cannot carry them
+            job_config = LoadJobConfig(
+                schema=full_schema,
+                source_format=SourceFormat.NEWLINE_DELIMITED_JSON,
+                write_disposition=getattr(WriteDisposition, write_disposition),
+            )
+        else:
+            job_config = LoadJobConfig(
+                schema=full_schema,
+                source_format=SourceFormat.CSV,
+                field_delimiter="\t",
+                skip_leading_rows=skip_leading_rows,
+                write_disposition=getattr(WriteDisposition, write_disposition),
+                allow_quoted_newlines=True,
+                null_marker="NA",
+            )
         print(f"Loading {gcs_uri} into {table_id}...")
         return client.load_table_from_uri(gcs_uri, table_id, job_config=job_config)
 
