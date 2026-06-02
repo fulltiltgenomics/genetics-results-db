@@ -326,7 +326,6 @@ genetics-results-db/
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD, SCHEMA2)
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results (BipEx, IBD, SCHEMA2)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
-│   ├── deploy.sh              # Deploy API to Cloud Run
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
 │   └── datasets.yaml          # Shared dataset/resource config (synced from suite repo)
@@ -336,8 +335,7 @@ genetics-results-db/
 ├── docs/
 │   └── project-spec.md        # This document
 ├── pyproject.toml             # Python project metadata and dependencies
-├── Dockerfile                 # Container image definition
-├── cloudbuild.yaml            # CI/CD configuration
+├── Dockerfile                 # Container image (built & deployed by genetics-results-suite via k8s)
 ├── README.md                  # Usage documentation
 └── .gitignore
 ```
@@ -380,10 +378,12 @@ genetics-results-db/
    ./scripts/load_gene_burden_extra.sh
    ```
 
-6. **Deploy API to Cloud Run** (optional):
-   ```bash
-   ./scripts/deploy.sh
-   ```
+### API deployment
+
+The API is **not** deployed from this repo. The container image (`Dockerfile`) is
+built from this repo and deployed to Kubernetes by the **genetics-results-suite**
+repo (the `db-api` deployment). This repo provides the BigQuery schema, data
+loaders, and API code only.
 
 ## Example Queries
 
