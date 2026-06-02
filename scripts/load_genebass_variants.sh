@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ts "Loading GeneBASS exome variant results into ${PROJECT_ID}.${DATASET_ID}.exome_variant_results"
 
 GENEBASS_VARIANT_FILES=(
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/genebass/genebass_variant_results_mlog10p4.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/genebass/genebass_variant_results_mlog10p4.tsv.bgz"
 )
 
 echo ""
