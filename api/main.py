@@ -310,12 +310,18 @@ async def get_schema(table: str | None = None):
             raw_cat_values = _get_categorical_values(table_name)
             cat_values = _compact_categorical_values(raw_cat_values)
 
-            # get row count from base table (views report 0)
+            # get row count and column modes from the base table: views report
+            # 0 rows and always-NULLABLE modes, so read the underlying table for
+            # both. View-only derived columns (resource, variant, maf) aren't in
+            # the base table and fall back to the view's mode.
             row_count = 0
+            base_modes: dict[str, str] = {}
             try:
                 base_table = table_name.removesuffix("_v")
                 base_ref = f"{PROJECT_ID}.{DATASET_ID}.{base_table}"
-                row_count = bq_client.get_table(base_ref).num_rows or 0
+                base_meta = bq_client.get_table(base_ref)
+                row_count = base_meta.num_rows or 0
+                base_modes = {f.name: f.mode for f in base_meta.schema}
             except Exception:
                 pass
 
@@ -326,7 +332,7 @@ async def get_schema(table: str | None = None):
                 col: dict[str, Any] = {
                     "name": field.name,
                     "type": field.field_type,
-                    "mode": field.mode,
+                    "mode": base_modes.get(field.name, field.mode),
                     "description": overrides.get(field.name, field.description or ""),
                 }
                 if field.name in cat_values:
