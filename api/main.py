@@ -110,6 +110,19 @@ logger.info("Loaded dataset config from YAML (%d resources, %d tables)",
 _VALUES_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _VALUES_CACHE_TTL_SECONDS = 3600
 
+# View-only derived columns aren't in any base table, and BigQuery reports all
+# view columns as NULLABLE. These are deterministic non-null transforms of
+# REQUIRED base columns, so declare their true mode here (anything not listed
+# falls back to NULLABLE): `variant` = CONCAT of REQUIRED chr/pos/ref/alt;
+# `resource*` = CASE over REQUIRED dataset with a non-null ELSE. `maf` is
+# intentionally absent — LEAST(aaf, 1-aaf) is NULL when the nullable aaf is.
+_DERIVED_COLUMN_MODES = {
+    "variant": "REQUIRED",
+    "resource": "REQUIRED",
+    "resource1": "REQUIRED",
+    "resource2": "REQUIRED",
+}
+
 
 def _get_categorical_values(view_name: str) -> dict[str, Any]:
     """Return distinct values for a view's categorical columns.
@@ -332,7 +345,7 @@ async def get_schema(table: str | None = None):
                 col: dict[str, Any] = {
                     "name": field.name,
                     "type": field.field_type,
-                    "mode": base_modes.get(field.name, field.mode),
+                    "mode": base_modes.get(field.name) or _DERIVED_COLUMN_MODES.get(field.name, field.mode),
                     "description": overrides.get(field.name, field.description or ""),
                 }
                 if field.name in cat_values:
