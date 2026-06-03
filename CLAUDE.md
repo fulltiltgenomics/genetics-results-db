@@ -28,6 +28,13 @@ QUALITY CODING RULES
 6. This should often be your first step in understanding a task.
 
 
+# datasets.yaml (single source of truth)
+
+1. `configs/datasets.yaml` in THIS repo is a generated COPY, not the source of truth. The canonical file lives in `../genetics-results-suite/configs/datasets.yaml`, and that is the copy deployed (mounted as a k8s ConfigMap into both service pods).
+2. NEVER edit `configs/datasets.yaml` here directly — changes won't deploy and will be overwritten on the next sync. Edit the canonical file in `genetics-results-suite`, then run `../genetics-results-suite/scripts/sync-datasets.sh` to copy it down into this repo (and `genetics-results-api`).
+3. After editing dataset/resource/table metadata, verify all copies are in sync (e.g. `diff` against the canonical file) and commit the synced copy in each affected repo.
+
+
 # Software Development Behavior Guidelines
 
 1. Don't guess and do things which you are not certain about. Ask the user instead.
