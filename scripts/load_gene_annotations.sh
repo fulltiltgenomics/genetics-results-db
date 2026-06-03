@@ -47,6 +47,12 @@ python3 "${SCRIPT_DIR}/load_data.py" \
   --gcs-uri "${STAGING_URI}" \
   --write-disposition WRITE_TRUNCATE
 
+# Ensure the gene_annotations_v view exists (CREATE OR REPLACE is idempotent --
+# no error if it already exists). The backend reads the dataset through this view.
+ts "Creating/updating view ${PROJECT_ID}.${DATASET_ID}.gene_annotations_v"
+sed "s/genetics_results/${PROJECT_ID}.${DATASET_ID}/g" "${SCRIPT_DIR}/../schemas/gene_annotations_v.sql" | \
+  bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --nouse_cache
+
 ts "=== gene_annotations load complete ==="
 count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
   "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.gene_annotations\`" 2>/dev/null | tail -1) || count="error"

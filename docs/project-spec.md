@@ -358,7 +358,7 @@ genetics-results-db/
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD, SCHEMA2)
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results (BipEx, IBD, SCHEMA2)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
-│   ├── load_gene_annotations.sh   # Build + load the gene_annotations reference table (WRITE_TRUNCATE)
+│   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
