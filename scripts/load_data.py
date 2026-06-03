@@ -166,10 +166,14 @@ SCHEMAS = {
     # field order is irrelevant here: loaded from NEWLINE_DELIMITED_JSON (named fields),
     # not positional CSV. gene_group_ids/names are REPEATED arrays, which CSV/TSV
     # cannot carry — see JSON_SCHEMAS below.
+    # modes mirror schemas/gene_annotations.sql: HGNC core identity fields and
+    # build-stamped provenance columns are REQUIRED (never NA); coordinate/
+    # cross-reference columns are NULLABLE (not every gene maps to GENCODE/
+    # Ensembl/NCBI); the gene-group arrays are REPEATED.
     "gene_annotations": [
-        bigquery.SchemaField("hgnc_id", "STRING"),
-        bigquery.SchemaField("symbol", "STRING"),
-        bigquery.SchemaField("name", "STRING"),
+        bigquery.SchemaField("hgnc_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("name", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("prev_symbols", "STRING"),
         bigquery.SchemaField("alias_symbols", "STRING"),
         bigquery.SchemaField("ensembl_gene_id", "STRING"),
@@ -178,12 +182,12 @@ SCHEMAS = {
         bigquery.SchemaField("gene_start", "INT64"),
         bigquery.SchemaField("gene_end", "INT64"),
         bigquery.SchemaField("strand", "STRING"),
-        bigquery.SchemaField("locus_type", "STRING"),
+        bigquery.SchemaField("locus_type", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("gene_group_ids", "INT64", mode="REPEATED"),
         bigquery.SchemaField("gene_group_names", "STRING", mode="REPEATED"),
-        bigquery.SchemaField("gencode_version", "STRING"),
-        bigquery.SchemaField("hgnc_version", "STRING"),
-        bigquery.SchemaField("download_date", "DATE"),
+        bigquery.SchemaField("gencode_version", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("hgnc_version", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("download_date", "DATE", mode="REQUIRED"),
     ],
 }
 

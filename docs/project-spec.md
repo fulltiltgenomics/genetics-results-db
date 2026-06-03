@@ -197,9 +197,9 @@ This table is a `query_bigquery` surface only. Its primary purpose is enabling c
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| hgnc_id | STRING | No | HGNC ID (e.g. HGNC:5) |
-| symbol | STRING | No | HGNC approved gene symbol |
-| name | STRING | No | HGNC approved gene name |
+| hgnc_id | STRING | Yes | HGNC ID (e.g. HGNC:5) |
+| symbol | STRING | Yes | HGNC approved gene symbol |
+| name | STRING | Yes | HGNC approved gene name |
 | prev_symbols | STRING | No | Previous HGNC symbols, pipe-delimited |
 | alias_symbols | STRING | No | Alias symbols, pipe-delimited |
 | ensembl_gene_id | STRING | No | Ensembl gene ID |
@@ -208,12 +208,14 @@ This table is a `query_bigquery` surface only. Its primary purpose is enabling c
 | gene_start | INT64 | No | Gene start position (GRCh38, GENCODE) |
 | gene_end | INT64 | No | Gene end position (GRCh38, GENCODE) |
 | strand | STRING | No | Strand (+ or -) |
-| locus_type | STRING | No | HGNC locus type (e.g. gene with protein product) |
-| gene_group_ids | ARRAY\<INT64\> | No | Full-lineage HGNC gene-group IDs (leaf group plus all ancestors) |
-| gene_group_names | ARRAY\<STRING\> | No | Full-lineage HGNC gene-group names (leaf group plus all ancestors) |
-| gencode_version | STRING | No | GENCODE release used for coordinates (provenance) |
-| hgnc_version | STRING | No | HGNC complete-set version/date used (provenance) |
-| download_date | DATE | No | Date the source data was downloaded/built (provenance) |
+| locus_type | STRING | Yes | HGNC locus type (e.g. gene with protein product) |
+| gene_group_ids | ARRAY\<INT64\> | REPEATED | Full-lineage HGNC gene-group IDs (leaf group plus all ancestors) |
+| gene_group_names | ARRAY\<STRING\> | REPEATED | Full-lineage HGNC gene-group names (leaf group plus all ancestors) |
+| gencode_version | STRING | Yes | GENCODE release used for coordinates (provenance) |
+| hgnc_version | STRING | Yes | HGNC complete-set version/date used (provenance) |
+| download_date | DATE | Yes | Date the source data was downloaded/built (provenance) |
+
+Required columns are NOT NULL in the DDL because they never contain NA: HGNC core identity fields (`hgnc_id`, `symbol`, `name`, `locus_type` — always present in the complete set; `symbol` is also filtered during the build) and the build-stamped provenance columns. Coordinate/cross-reference columns (`chr`, `gene_start`, `gene_end`, `strand`, `ensembl_gene_id`, `ncbi_gene_id`) are NULLABLE because not every HGNC gene maps to GENCODE/Ensembl/NCBI. The gene-group arrays are REPEATED (an empty array, never NULL).
 
 **Gene-group lineage.** `gene_group_ids` and `gene_group_names` are full-lineage arrays: each gene's leaf group(s) plus all ancestor groups in the HGNC hierarchy. The arrays are built from three HGNC-native CSV files — `hgnc_gene_has_family.csv` (gene → leaf group), `hgnc_hierarchy_closure.csv` (which is already transitive, expanding each child group to all of its ancestors), and `hgnc_family.csv` (group ID → name). Because the lineage is precomputed, membership in *any* group (leaf or ancestor) is queryable directly with `<group_id> IN UNNEST(gene_group_ids)`, with no recursive join needed.
 
