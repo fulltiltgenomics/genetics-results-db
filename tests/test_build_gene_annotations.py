@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from build_gene_annotations import (  # noqa: E402
     assemble_genes,
     build_closure_map,
+    canonical_hgnc_id,
     chrom_to_int,
     full_lineage_groups,
 )
@@ -36,10 +37,13 @@ FAMILY = pl.DataFrame(
     }
 )
 
-# GENE_A leaf is the deep child (3); GENE_B is in standalone group (9)
+# GENE_A leaf is the deep child (3); GENE_B is in standalone group (9).
+# NOTE: hgnc_gene_has_family.csv uses BARE numeric hgnc ids ("1"), whereas
+# hgnc_complete_set.txt (HGNC below) uses the prefixed "HGNC:1" form. The build
+# must canonicalize both or the join yields empty group arrays.
 GENE_HAS_FAMILY = pl.DataFrame(
     {
-        "hgnc_id": ["HGNC:1", "HGNC:2"],
+        "hgnc_id": ["1", "2"],
         "family_id": ["3", "9"],
     }
 )
@@ -88,6 +92,18 @@ def test_chrom_to_int_integer_encoded_passthrough():
     assert chrom_to_int("chr1") == 1
     assert chrom_to_int("0") is None
     assert chrom_to_int("27") is None
+
+
+def test_canonical_hgnc_id_normalizes_both_formats():
+    # bare numeric (gene_has_family form) gets the prefix
+    assert canonical_hgnc_id("5") == "HGNC:5"
+    # already-prefixed (complete_set form) is unchanged
+    assert canonical_hgnc_id("HGNC:5") == "HGNC:5"
+    # case-insensitive prefix + stray whitespace
+    assert canonical_hgnc_id(" hgnc:5 ") == "HGNC:5"
+    # empty / missing
+    assert canonical_hgnc_id("") is None
+    assert canonical_hgnc_id(None) is None
 
 
 def test_closure_map_inverts_to_ancestors():

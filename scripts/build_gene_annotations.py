@@ -64,6 +64,26 @@ def strip_ensembl_version(ensembl_id: str | None) -> str | None:
     return ensembl_id.split(".")[0]
 
 
+def canonical_hgnc_id(value: str | None) -> str | None:
+    """Normalize an HGNC id to its canonical 'HGNC:NNNN' form.
+
+    The HGNC sources disagree on format: hgnc_complete_set.txt uses the prefixed
+    'HGNC:5' form, while the gene-group files (hgnc_gene_has_family.csv) use bare
+    numeric ids ('5'). Both must be normalized to the same key or the gene->family
+    join silently produces empty gene_group arrays for every gene.
+    """
+    if value is None:
+        return None
+    v = str(value).strip()
+    if not v:
+        return None
+    if v.upper().startswith("HGNC:"):
+        return "HGNC:" + v[5:].strip()
+    if v.isdigit():
+        return f"HGNC:{v}"
+    return v
+
+
 def build_closure_map(closure: pl.DataFrame) -> dict[int, set[int]]:
     """Map each child family id to the set of all its ancestor (parent) family ids.
 
@@ -137,8 +157,9 @@ def assemble_genes(
     for row in gene_has_family.select(
         pl.col("hgnc_id"), pl.col("family_id").cast(pl.Int64, strict=False)
     ).iter_rows(named=True):
-        if row["hgnc_id"] and row["family_id"] is not None:
-            leaves.setdefault(row["hgnc_id"], []).append(int(row["family_id"]))
+        key = canonical_hgnc_id(row["hgnc_id"])
+        if key and row["family_id"] is not None:
+            leaves.setdefault(key, []).append(int(row["family_id"]))
 
     # gencode coords keyed by version-stripped ENSG
     coords: dict[str, dict] = {}
@@ -164,7 +185,7 @@ def assemble_genes(
         coord = coords.get(ensembl_id) if ensembl_id else None
 
         group_ids, group_names = full_lineage_groups(
-            leaves.get(hgnc_id, []), ancestors, family_names
+            leaves.get(canonical_hgnc_id(hgnc_id), []), ancestors, family_names
         )
 
         records.append(
