@@ -9,6 +9,9 @@ SELECT
     WHEN dataset1 LIKE 'UKB%' THEN 'ukbb'
     WHEN dataset1 LIKE 'Open_Targets%' THEN 'open_targets'
     WHEN dataset1 LIKE 'COVID19_HGI%' THEN 'covid_hgi'
+    WHEN dataset1 = 'PGC' THEN 'pgc'
+    WHEN dataset1 = 'GP2' THEN 'gp2'
+    WHEN dataset1 = 'IIBDGC' THEN 'ibd_gwas'
     ELSE LOWER(dataset1)
   END AS resource1,
   CASE
@@ -18,6 +21,9 @@ SELECT
     WHEN dataset2 LIKE 'UKB%' THEN 'ukbb'
     WHEN dataset2 LIKE 'Open_Targets%' THEN 'open_targets'
     WHEN dataset2 LIKE 'COVID19_HGI%' THEN 'covid_hgi'
+    WHEN dataset2 = 'PGC' THEN 'pgc'
+    WHEN dataset2 = 'GP2' THEN 'gp2'
+    WHEN dataset2 = 'IIBDGC' THEN 'ibd_gwas'
     ELSE LOWER(dataset2)
   END AS resource2
 FROM `genetics_results.colocalization`;

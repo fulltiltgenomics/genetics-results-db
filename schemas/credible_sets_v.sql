@@ -11,6 +11,9 @@ SELECT
     WHEN dataset LIKE 'UKB%' THEN 'ukbb'
     WHEN dataset LIKE 'Open_Targets%' THEN 'open_targets'
     WHEN dataset LIKE 'COVID19_HGI%' THEN 'covid_hgi'
+    WHEN dataset = 'PGC' THEN 'pgc'
+    WHEN dataset = 'GP2' THEN 'gp2'
+    WHEN dataset = 'IIBDGC' THEN 'ibd_gwas'
     ELSE LOWER(dataset)
   END AS resource
 FROM `genetics_results.credible_sets`;
