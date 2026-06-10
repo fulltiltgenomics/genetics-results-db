@@ -1,7 +1,8 @@
 #!/bin/bash
 # Load pseudo credible set data from GCS into BigQuery
 # these are FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets,
-# plus a shared external file bundling COVID-19 HGI, PGC (SCZ/BIP) and GP2 (PD)
+# plus a shared external file bundling COVID-19 HGI, PGC (SCZ/BIP), GP2 (PD) and
+# IIBDGC (IBD/UC/CD)
 
 set -euo pipefail
 
@@ -23,7 +24,7 @@ PSEUDO_CREDSET_FILES=(
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_ukbb_labs_pseudo/r13/FinnGen_R13_UKBB_labs_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_mvp_ukbb_pseudo/r13/FinnGen_R13_MVP_UKBB_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_mvp_ukbb_labs_pseudo/r13/FinnGen_R13_MVP_UKBB_labs_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/ext/EXT_20260526_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/ext_pseudo/EXT_20260610_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
 )
 
 echo ""
@@ -32,7 +33,7 @@ bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
   "DELETE FROM \`${PROJECT_ID}.${DATASET_ID}.credible_sets\`
    WHERE dataset IN ('FinnGen_R13_UKBB', 'FinnGen_R13_UKBB_labs',
                      'FinnGen_R13_MVP_UKBB', 'FinnGen_R13_MVP_UKBB_labs',
-                     'COVID19_HGI', 'PGC', 'GP2')"
+                     'COVID19_HGI', 'PGC', 'GP2', 'IIBDGC')"
 ts "Done"
 
 echo ""
