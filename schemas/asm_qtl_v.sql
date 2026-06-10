@@ -5,7 +5,7 @@ SELECT
   CONCAT(chr, ':', pos, ':', ref, ':', alt) AS variant,
   LEAST(af, 1 - af) AS maf,
   CASE
-    WHEN dataset LIKE 'deCODE%' THEN 'decode'
+    WHEN LOWER(dataset) LIKE 'decode%' THEN 'decode'
     ELSE LOWER(dataset)
   END AS resource
 FROM `genetics_results.asm_qtl`;

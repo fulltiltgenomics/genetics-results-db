@@ -25,6 +25,7 @@ ALL_VIEWS = [
     "coloc_credsets_v",
     "exome_variant_results_v",
     "gene_burden_results_v",
+    "asm_qtl_v",
 ]
 
 # colocalization_v maps dataset1->resource1 and dataset2->resource2
@@ -81,10 +82,14 @@ def generate_case_fragment(rules, dataset_col="dataset", indent=2):
                 lines.append(f"{prefix}  ELSE LOWER({dataset_col})")
             continue
 
+        # Match case-insensitively: dataset values can be loaded with different
+        # casing than the rule pattern (e.g. deCODE% vs decode_*), and a
+        # case-sensitive comparison would silently fall through to the lowercase
+        # fallback, mislabeling the resource.
         if is_like_pattern(pattern):
-            condition = f"{dataset_col} LIKE '{pattern}'"
+            condition = f"LOWER({dataset_col}) LIKE '{pattern.lower()}'"
         else:
-            condition = f"{dataset_col} = '{pattern}'"
+            condition = f"LOWER({dataset_col}) = '{pattern.lower()}'"
 
         if resource is not None:
             lines.append(f"{prefix}  WHEN {condition} THEN '{resource}'")
