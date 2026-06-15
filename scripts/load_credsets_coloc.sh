@@ -22,6 +22,7 @@ CREDSET_FILES=(
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_kanta/r12_20251024/FinnGen_R12kanta_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_drugs/r12_20251024/FinnGen_R12drugs_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_olink/20251024/FinnGen_Olink_1-4_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_olink_5k/FinnGen_Olink_5K_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/ukb_ppp/20251024/UKB_PPP_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_snrnaseq/20251024/FinnGen_snRNAseq_202509_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_atacseq/20251118/FinnGen_ATACseq_202509_credible_sets.tsv.gz"
@@ -37,8 +38,8 @@ ts "=== Deleting existing credible_sets rows owned by this script ==="
 bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
   "DELETE FROM \`${PROJECT_ID}.${DATASET_ID}.credible_sets\`
    WHERE dataset IN ('FinnGen_R14', 'FinnGen_kanta', 'FinnGen_drugs',
-                     'FinnGen_Olink', 'UKB_PPP', 'FinnGen_snRNAseq',
-                     'FinnGen_ATACseq', 'Open_Targets_25.12')
+                     'FinnGen_Olink', 'FinnGen_Olink_5K', 'UKB_PPP',
+                     'FinnGen_snRNAseq', 'FinnGen_ATACseq', 'Open_Targets_25.12')
       OR dataset LIKE 'QTD%'"
 ts "Done"
 
