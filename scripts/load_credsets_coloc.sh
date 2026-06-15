@@ -19,7 +19,7 @@ ts "Loading data into ${PROJECT_ID}.${DATASET_ID}"
 # credible sets files
 CREDSET_FILES=(
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_core/r14/FinnGen_R14_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_kanta/r12_20251024/FinnGen_R12kanta_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_kanta/r14/FinnGen_R14kanta_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_drugs/r12_20251024/FinnGen_R12drugs_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_olink/20251024/FinnGen_Olink_1-4_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_olink_5k/FinnGen_Olink_5K_credible_sets.tsv.gz"
