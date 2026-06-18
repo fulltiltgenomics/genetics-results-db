@@ -141,11 +141,11 @@ Variants belonging to colocalized credible sets.
 
 ### exome_variant_results
 
-Variant-level association results from exome sequencing studies (GeneBASS, IBD exome, SCHEMA2). All filtered to mlog10p > 4. Data files are in `exome_results/` on GCS.
+Variant-level association results from exome sequencing studies (GeneBASS, IBD exome). All filtered to mlog10p > 4. Data files are in `exome_results/` on GCS.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| dataset | STRING | Yes | Source dataset (genebass, IBD_exome, SCHEMA2) |
+| dataset | STRING | Yes | Source dataset (genebass, IBD_exome) |
 | chr | INT64 | Yes | Chromosome |
 | pos | INT64 | Yes | Position |
 | ref | STRING | Yes | Reference allele |
@@ -357,7 +357,7 @@ genetics-results-db/
 │   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses, external EXT file: COVID-19 HGI + PGC + GP2)
 │   ├── load_genebass_variants.sh    # Load GeneBASS exome variant results (truncates table)
 │   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results (truncates table)
-│   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD, SCHEMA2)
+│   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results (BipEx, IBD, SCHEMA2)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view

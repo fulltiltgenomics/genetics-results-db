@@ -16,7 +16,7 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/load_genebass_gene.sh](scripts/load_genebass_gene.sh) loads GeneBASS gene burden results (truncates `gene_burden_results`)
 
-[scripts/load_exome_variants_extra.sh](scripts/load_exome_variants_extra.sh) appends additional exome variant results (IBD, SCHEMA2)
+[scripts/load_exome_variants_extra.sh](scripts/load_exome_variants_extra.sh) appends additional exome variant results (IBD)
 
 [scripts/load_gene_burden_extra.sh](scripts/load_gene_burden_extra.sh) appends additional gene burden results (BipEx, IBD, SCHEMA2)
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Append additional exome variant results (IBD, SCHEMA2) to exome_variant_results.
+# Append additional exome variant results (IBD) to exome_variant_results.
 # Run after load_genebass_variants.sh, which loads GeneBASS and truncates the table.
 
 set -euo pipefail
@@ -21,7 +21,6 @@ EXOME_VARIANT_FILES=(
   "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_IBD_variant_results.munged.mlog10p_gt4.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_UC_variant_results.munged.mlog10p_gt4.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_CD_variant_results.munged.mlog10p_gt4.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/schema/SCHEMA2_variant_results.munged.mlog10p_gt4.tsv.gz"
 )
 
 echo ""

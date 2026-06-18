@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS `genetics_results.exome_variant_results`
 (
-  dataset STRING NOT NULL OPTIONS(description="Source dataset (genebass, IBD_exome, SCHEMA2)"),
+  dataset STRING NOT NULL OPTIONS(description="Source dataset (genebass, IBD_exome)"),
   chr INT64 NOT NULL OPTIONS(description="Chromosome"),
   pos INT64 NOT NULL OPTIONS(description="Position"),
   ref STRING NOT NULL OPTIONS(description="Reference allele"),
@@ -23,6 +23,6 @@ CREATE TABLE IF NOT EXISTS `genetics_results.exome_variant_results`
 PARTITION BY RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))
 CLUSTER BY dataset, gene, trait
 OPTIONS(
-  description="Variant-level association results from exome sequencing studies (GeneBASS, IBD exome, SCHEMA2)",
+  description="Variant-level association results from exome sequencing studies (GeneBASS, IBD exome)",
   labels=[("domain", "genetics"), ("data_type", "exome_variant_results")]
 );
