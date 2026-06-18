@@ -395,6 +395,7 @@ genetics-results-db/
    ```bash
    ./scripts/load_credsets_coloc.sh
    ```
+   Loads run in parallel: each table's wipe (the `credible_sets` surgical `DELETE`, and the first `WRITE_TRUNCATE` load of each coloc table) is awaited before that table's files are appended concurrently. `credible_sets` loads first, then `colocalization` and `coloc_credsets` load concurrently.
 
 3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
    ```bash
