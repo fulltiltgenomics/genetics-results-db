@@ -26,6 +26,7 @@ ALL_VIEWS = [
     "exome_variant_results_v",
     "gene_burden_results_v",
     "asm_qtl_v",
+    "open_chromatin_v",
 ]
 
 # colocalization_v maps dataset1->resource1 and dataset2->resource2

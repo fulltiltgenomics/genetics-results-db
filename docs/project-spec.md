@@ -349,7 +349,9 @@ genetics-results-db/
 │   ├── gene_burden_results.sql        # GeneBASS gene burden results table
 │   ├── gene_burden_results_v.sql      # View with resource column
 │   ├── gene_annotations.sql           # Whole-universe gene annotations table (HGNC + GENCODE)
-│   └── gene_annotations_v.sql         # View with resource column
+│   ├── gene_annotations_v.sql         # View with resource column
+│   ├── open_chromatin.sql             # Open-chromatin atlas table (accessible regions by cell type/tissue/condition)
+│   └── open_chromatin_v.sql           # View with resource column
 ├── scripts/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
@@ -360,6 +362,7 @@ genetics-results-db/
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results (BipEx, IBD, SCHEMA2)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
+│   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
