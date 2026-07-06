@@ -214,6 +214,31 @@ SCHEMAS = {
         bigquery.SchemaField("target_gene_id", "STRING"),
         bigquery.SchemaField("version", "STRING"),
     ],
+    # column order must match TSV file exactly (canonical variant_effect layout:
+    # chrom, pos, ref, alt, variant, rsid, dataset, model, cell_type, tissue,
+    # life_stage, score, score_type, mlog10p, predicted_direction, quantile_rank,
+    # is_significant, version). The source chrom is a chr-prefixed string; it is
+    # converted to the INT64 `chr` column via CHR_STRING_TABLES staging (see below).
+    "variant_effect": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("variant", "STRING"),
+        bigquery.SchemaField("rsid", "STRING"),
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("model", "STRING"),
+        bigquery.SchemaField("cell_type", "STRING"),
+        bigquery.SchemaField("tissue", "STRING"),
+        bigquery.SchemaField("life_stage", "STRING"),
+        bigquery.SchemaField("score", "FLOAT64"),
+        bigquery.SchemaField("score_type", "STRING"),
+        bigquery.SchemaField("mlog10p", "FLOAT64"),
+        bigquery.SchemaField("predicted_direction", "STRING"),
+        bigquery.SchemaField("quantile_rank", "FLOAT64"),
+        bigquery.SchemaField("is_significant", "BOOL"),
+        bigquery.SchemaField("version", "STRING"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
@@ -225,7 +250,7 @@ JSON_SCHEMAS = {"gene_annotations"}
 # to the tabix API (which requires chr-prefixed seqnames), so it cannot be
 # pre-munged to integers. These tables are always routed through the staging
 # path: `chr` is loaded as STRING, then converted to INT64 on projection.
-CHR_STRING_TABLES = {"open_chromatin"}
+CHR_STRING_TABLES = {"open_chromatin", "variant_effect"}
 
 # SQL to convert a chr-prefixed string ("chr1"/"chrX") to the INT64 encoding
 # used across the tables: X=23, Y=24, M/MT=25 (mirrors chrom_to_int() in
