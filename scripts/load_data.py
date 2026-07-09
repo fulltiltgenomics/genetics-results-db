@@ -192,8 +192,8 @@ SCHEMAS = {
     # column order must match TSV file exactly (canonical open_chromatin layout:
     # chrom, start, end, peak_id, dataset, cell_type, tissue, life_stage, condition,
     # assay, score, score_type, n_cells, cell_ontology_id, uberon_id, target_gene,
-    # target_gene_id, version). The source chrom is a chr-prefixed string; it is
-    # converted to the INT64 `chr` column via CHR_STRING_TABLES staging (see below).
+    # target_gene_id, version). The source chrom is a numeric string (X=23,Y=24,
+    # M=25); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES staging.
     "open_chromatin": [
         bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
         bigquery.SchemaField("peak_start", "INT64", mode="REQUIRED"),
@@ -217,8 +217,8 @@ SCHEMAS = {
     # column order must match TSV file exactly (canonical variant_effect layout:
     # chrom, pos, ref, alt, variant, rsid, dataset, model, cell_type, tissue,
     # life_stage, score, score_type, mlog10p, predicted_direction, quantile_rank,
-    # is_significant, version). The source chrom is a chr-prefixed string; it is
-    # converted to the INT64 `chr` column via CHR_STRING_TABLES staging (see below).
+    # is_significant, version). The source chrom is a numeric string (X=23,Y=24,
+    # M=25); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES staging.
     "variant_effect": [
         bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
         bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
@@ -245,17 +245,19 @@ SCHEMAS = {
 # REPEATED/ARRAY columns, which the CSV loader cannot populate)
 JSON_SCHEMAS = {"gene_annotations"}
 
-# tables whose source TSV encodes the `chr` column as a chr-prefixed string
-# ("chr1".."chrX") but whose BigQuery column is INT64. The same file is served
-# to the tabix API (which requires chr-prefixed seqnames), so it cannot be
-# pre-munged to integers. These tables are always routed through the staging
-# path: `chr` is loaded as STRING, then converted to INT64 on projection.
+# tables whose source TSV encodes the `chr` column as a string but whose BigQuery
+# column is INT64. The same file is served to the tabix API, whose seqnames are now
+# numeric ("1".."25", X=23/Y=24/M=25), so the source chrom is already numeric. These
+# tables are always routed through the staging path: `chr` is loaded as STRING, then
+# converted to INT64 on projection. The conversion still tolerates a legacy "chr"
+# prefix and X/Y/M spellings so mixed inputs load consistently.
 CHR_STRING_TABLES = {"open_chromatin", "variant_effect"}
 
-# SQL to convert a chr-prefixed string ("chr1"/"chrX") to the INT64 encoding
-# used across the tables: X=23, Y=24, M/MT=25 (mirrors chrom_to_int() in
-# build_gene_annotations.py). Non-matching values become NULL and fail the
-# REQUIRED chr constraint, surfacing malformed input rather than dropping it.
+# SQL to normalize a chrom string to the INT64 encoding used across the tables:
+# X=23, Y=24, M/MT=25 (mirrors chrom_to_int() in build_gene_annotations.py).
+# Numeric input (e.g. "23") SAFE_CASTs straight through; any leading "chr" is
+# stripped first. Non-matching values become NULL and fail the REQUIRED chr
+# constraint, surfacing malformed input rather than dropping it.
 CHR_STRING_TO_INT_SQL = (
     "CASE UPPER(REGEXP_REPLACE({col}, r'(?i)^chr', ''))"
     " WHEN 'X' THEN 23"

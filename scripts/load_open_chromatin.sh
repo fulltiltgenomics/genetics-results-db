@@ -1,7 +1,7 @@
 #!/bin/bash
 # Load open-chromatin atlas data from GCS into BigQuery (Product A).
 # The canonical/tabix TSVs already carry the 18-column layout including the
-# `dataset` column, so no --const-column injection is needed. The chr-prefixed
+# `dataset` column, so no --const-column injection is needed. The numeric
 # `chrom` string is converted to INT64 `chr` by load_data.py (CHR_STRING_TABLES).
 
 set -euo pipefail
