@@ -189,11 +189,84 @@ SCHEMAS = {
         bigquery.SchemaField("hgnc_version", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("download_date", "DATE", mode="REQUIRED"),
     ],
+    # column order must match TSV file exactly (canonical open_chromatin layout:
+    # chrom, start, end, peak_id, dataset, cell_type, tissue, life_stage, condition,
+    # assay, score, score_type, n_cells, cell_ontology_id, uberon_id, target_gene,
+    # target_gene_id, version). The source chrom is a numeric string (X=23,Y=24,
+    # M=25); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES staging.
+    "open_chromatin": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("peak_start", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("peak_end", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("peak_id", "STRING"),
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cell_type", "STRING"),
+        bigquery.SchemaField("tissue", "STRING"),
+        bigquery.SchemaField("life_stage", "STRING"),
+        bigquery.SchemaField("condition", "STRING"),
+        bigquery.SchemaField("assay", "STRING"),
+        bigquery.SchemaField("score", "FLOAT64"),
+        bigquery.SchemaField("score_type", "STRING"),
+        bigquery.SchemaField("n_cells", "INT64"),
+        bigquery.SchemaField("cell_ontology_id", "STRING"),
+        bigquery.SchemaField("uberon_id", "STRING"),
+        bigquery.SchemaField("target_gene", "STRING"),
+        bigquery.SchemaField("target_gene_id", "STRING"),
+        bigquery.SchemaField("version", "STRING"),
+    ],
+    # column order must match TSV file exactly (canonical variant_effect layout:
+    # chrom, pos, ref, alt, variant, rsid, dataset, model, cell_type, tissue,
+    # life_stage, score, score_type, mlog10p, predicted_direction, quantile_rank,
+    # is_significant, version). The source chrom is a numeric string (X=23,Y=24,
+    # M=25); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES staging.
+    "variant_effect": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("variant", "STRING"),
+        bigquery.SchemaField("rsid", "STRING"),
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("model", "STRING"),
+        bigquery.SchemaField("cell_type", "STRING"),
+        bigquery.SchemaField("tissue", "STRING"),
+        bigquery.SchemaField("life_stage", "STRING"),
+        bigquery.SchemaField("score", "FLOAT64"),
+        bigquery.SchemaField("score_type", "STRING"),
+        bigquery.SchemaField("mlog10p", "FLOAT64"),
+        bigquery.SchemaField("predicted_direction", "STRING"),
+        bigquery.SchemaField("quantile_rank", "FLOAT64"),
+        bigquery.SchemaField("is_significant", "BOOL"),
+        bigquery.SchemaField("version", "STRING"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
 # REPEATED/ARRAY columns, which the CSV loader cannot populate)
 JSON_SCHEMAS = {"gene_annotations"}
+
+# tables whose source TSV encodes the `chr` column as a string but whose BigQuery
+# column is INT64. The same file is served to the tabix API, whose seqnames are now
+# numeric ("1".."25", X=23/Y=24/M=25), so the source chrom is already numeric. These
+# tables are always routed through the staging path: `chr` is loaded as STRING, then
+# converted to INT64 on projection. The conversion still tolerates a legacy "chr"
+# prefix and X/Y/M spellings so mixed inputs load consistently.
+CHR_STRING_TABLES = {"open_chromatin", "variant_effect"}
+
+# SQL to normalize a chrom string to the INT64 encoding used across the tables:
+# X=23, Y=24, M/MT=25 (mirrors chrom_to_int() in build_gene_annotations.py).
+# Numeric input (e.g. "23") SAFE_CASTs straight through; any leading "chr" is
+# stripped first. Non-matching values become NULL and fail the REQUIRED chr
+# constraint, surfacing malformed input rather than dropping it.
+CHR_STRING_TO_INT_SQL = (
+    "CASE UPPER(REGEXP_REPLACE({col}, r'(?i)^chr', ''))"
+    " WHEN 'X' THEN 23"
+    " WHEN 'Y' THEN 24"
+    " WHEN 'M' THEN 25"
+    " WHEN 'MT' THEN 25"
+    " ELSE SAFE_CAST(REGEXP_REPLACE({col}, r'(?i)^chr', '') AS INT64)"
+    " END"
+)
 
 
 def _coerce_const(value: str, bq_type: str):
@@ -230,16 +303,20 @@ def load_table(
 
     full_schema = SCHEMAS[table_type]
     const_columns = const_columns or {}
+    convert_chr = table_type in CHR_STRING_TABLES
 
-    if table_type in JSON_SCHEMAS and const_columns:
-        # const-column injection relies on a CSV staging table; it is not wired up
-        # for the JSON load path (no current JSON table needs it)
+    if table_type in JSON_SCHEMAS and (const_columns or convert_chr):
+        # const-column injection / chr conversion rely on a CSV staging table;
+        # they are not wired up for the JSON load path (no current JSON table needs it)
         raise ValueError(
-            f"--const-column is not supported for JSON-loaded table '{table_type}'"
+            f"staging-path load (const-column / chr conversion) is not supported "
+            f"for JSON-loaded table '{table_type}'"
         )
 
-    if not const_columns:
-        # direct-load path: no constant columns to inject
+    needs_staging = bool(const_columns) or convert_chr
+
+    if not needs_staging:
+        # direct-load path: no constant columns to inject, no chr conversion
         if table_type in JSON_SCHEMAS:
             # ARRAY/REPEATED columns require JSON; CSV/TSV cannot carry them
             job_config = LoadJobConfig(
@@ -267,7 +344,16 @@ def load_table(
             f"--const-column references columns not in schema '{table_type}': {unknown}"
         )
 
-    staging_schema = [f for f in full_schema if f.name not in const_columns]
+    # build the staging schema: drop injected const columns, and stage any
+    # chr-string column as STRING so it can be regex-converted on projection
+    staging_schema = []
+    for f in full_schema:
+        if f.name in const_columns:
+            continue
+        if convert_chr and f.name == "chr":
+            staging_schema.append(bigquery.SchemaField("chr", "STRING"))
+        else:
+            staging_schema.append(f)
     staging_id = f"{table_id}__staging_{uuid.uuid4().hex[:8]}"
 
     load_config = LoadJobConfig(
@@ -294,6 +380,8 @@ def load_table(
                 py_value = _coerce_const(const_columns[f.name], f.field_type)
                 col_exprs.append(f"@{pname} AS `{f.name}`")
                 params.append(bigquery.ScalarQueryParameter(pname, f.field_type, py_value))
+            elif convert_chr and f.name == "chr":
+                col_exprs.append(CHR_STRING_TO_INT_SQL.format(col="`chr`") + " AS `chr`")
             else:
                 col_exprs.append(f"`{f.name}`")
 
