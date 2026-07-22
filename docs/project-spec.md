@@ -332,6 +332,11 @@ Configuration via environment variables:
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
 | PORT | 8080 | API server port |
 | DATASETS_CONFIG_PATH | ./configs/datasets.yaml | Path to shared datasets YAML config |
+| CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
+
+CORS responses cannot use a wildcard origin: the API is configured with
+`allow_credentials=True`, and browsers reject `Access-Control-Allow-Origin: *` on
+credentialed requests. Set `CORS_ORIGINS` to the exact origins of any browser client.
 
 ## Project Structure
 
