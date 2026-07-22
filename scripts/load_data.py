@@ -239,6 +239,31 @@ SCHEMAS = {
         bigquery.SchemaField("is_significant", "BOOL"),
         bigquery.SchemaField("version", "STRING"),
     ],
+    # column order must match TSV file exactly (canonical mpra LONG layout:
+    # chrom, pos, variant, ref, alt, cohort, cell_line, emVar, active, log2Skew,
+    # log2Skew_se, log2Skew_mlog10p, log2FC, log2FC_mlog10p, mean_RNA_ref,
+    # mean_RNA_alt). The source chrom is a numeric string (X=23,Y=24,M=25); it is
+    # loaded to the INT64 `chr` column via CHR_STRING_TABLES staging. `dataset` is
+    # not in the file — it is injected at load with --const-column dataset=siraj_mpra.
+    "mpra": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("variant", "STRING"),
+        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cohort", "STRING"),
+        bigquery.SchemaField("cell_line", "STRING"),
+        bigquery.SchemaField("emVar", "BOOL"),
+        bigquery.SchemaField("active", "BOOL"),
+        bigquery.SchemaField("log2Skew", "FLOAT64"),
+        bigquery.SchemaField("log2Skew_se", "FLOAT64"),
+        bigquery.SchemaField("log2Skew_mlog10p", "FLOAT64"),
+        bigquery.SchemaField("log2FC", "FLOAT64"),
+        bigquery.SchemaField("log2FC_mlog10p", "FLOAT64"),
+        bigquery.SchemaField("mean_RNA_ref", "FLOAT64"),
+        bigquery.SchemaField("mean_RNA_alt", "FLOAT64"),
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
@@ -251,7 +276,7 @@ JSON_SCHEMAS = {"gene_annotations"}
 # tables are always routed through the staging path: `chr` is loaded as STRING, then
 # converted to INT64 on projection. The conversion still tolerates a legacy "chr"
 # prefix and X/Y/M spellings so mixed inputs load consistently.
-CHR_STRING_TABLES = {"open_chromatin", "variant_effect"}
+CHR_STRING_TABLES = {"open_chromatin", "variant_effect", "mpra"}
 
 # SQL to normalize a chrom string to the INT64 encoding used across the tables:
 # X=23, Y=24, M/MT=25 (mirrors chrom_to_int() in build_gene_annotations.py).
