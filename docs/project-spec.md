@@ -388,6 +388,15 @@ genetics-results-db/
 
 - Google Cloud SDK (`gcloud`) configured
 - BigQuery API enabled
+- **The project virtualenv must be activated** before running any `scripts/load_*.sh`.
+  The loaders invoke bare `python3`, which resolves to the system interpreter — that
+  one has no `google-cloud-bigquery` and the load dies with
+  `ModuleNotFoundError: No module named 'google'`:
+  ```bash
+  source .venv/bin/activate      # create/refresh with: uv sync
+  ```
+  (Not needed inside the container: `Dockerfile` installs dependencies with
+  `uv pip install --system`, so there is no `.venv` there.)
 
 ### Setup Steps
 
