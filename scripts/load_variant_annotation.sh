@@ -15,7 +15,7 @@ ts() {
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-finngen-commons}"
-GCS_PREFIX="${GCS_PREFIX:-results_api_data/}"
+GCS_PREFIX="${GCS_PREFIX-results_api_data/}"
 VA_FILE="${VA_FILE:-variant_annotations/R14_annotated_variants_v0.small.gz}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
