@@ -76,6 +76,7 @@ curl -X POST http://localhost:8080/query \
 | `MAX_ROWS` | 100000 | Max rows returned per query |
 | `MAX_BYTES_BILLED` | 107374182400 | Max bytes billed per query |
 | `PORT` | 8080 | Server port |
+| `CORS_ORIGINS` | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated browser origins allowed by CORS |
 
 ## Tables
 

@@ -264,6 +264,29 @@ SCHEMAS = {
         bigquery.SchemaField("mean_RNA_alt", "FLOAT64"),
         bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
     ],
+    # column order must match TSV file exactly (canonical FinnGen R14 annotation
+    # layout from R14_annotated_variants_v0.small.gz, the same file the API serves
+    # at /variant_annotation/finngen): variant, chr, pos, ref, alt, INFO, AF,
+    # AC_Het, AC_Hom, most_severe, gene_most_severe, rsid, EXOME_enrichment_nfe,
+    # GENOME_enrichment_nfe, index. chr is already numeric in the source (X=23),
+    # so no CHR_STRING_TABLES staging is needed.
+    "variant_annotation": [
+        bigquery.SchemaField("variant", "STRING"),
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("INFO", "FLOAT64"),
+        bigquery.SchemaField("AF", "FLOAT64"),
+        bigquery.SchemaField("AC_Het", "INT64"),
+        bigquery.SchemaField("AC_Hom", "INT64"),
+        bigquery.SchemaField("most_severe", "STRING"),
+        bigquery.SchemaField("gene_most_severe", "STRING"),
+        bigquery.SchemaField("rsid", "STRING"),
+        bigquery.SchemaField("EXOME_enrichment_nfe", "FLOAT64"),
+        bigquery.SchemaField("GENOME_enrichment_nfe", "FLOAT64"),
+        bigquery.SchemaField("index", "INT64"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for

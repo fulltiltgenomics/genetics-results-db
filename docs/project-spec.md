@@ -219,6 +219,28 @@ Required columns are NOT NULL in the DDL because they never contain NA: HGNC cor
 
 **Gene-group lineage.** `gene_group_ids` and `gene_group_names` are full-lineage arrays: each gene's leaf group(s) plus all ancestor groups in the HGNC hierarchy. The arrays are built from three HGNC-native CSV files — `hgnc_gene_has_family.csv` (gene → leaf group), `hgnc_hierarchy_closure.csv` (which is already transitive, expanding each child group to all of its ancestors), and `hgnc_family.csv` (group ID → name). Because the lineage is precomputed, membership in *any* group (leaf or ancestor) is queryable directly with `<group_id> IN UNNEST(gene_group_ids)`, with no recursive join needed. **HGNC id format**: `hgnc_gene_has_family.csv` keys genes by BARE numeric id (`3023`) while `hgnc_complete_set.txt` uses the prefixed `HGNC:3023` form; the build canonicalizes both to `HGNC:NNNN` (via `canonical_hgnc_id`) before joining. Without this the gene→family join silently misses for every gene, leaving all `gene_group_*` arrays empty — so after any rebuild, sanity-check that `COUNTIF(ARRAY_LENGTH(gene_group_ids) > 0) > 0`. For GPCR-type analyses, exclude olfactory receptors (which dominate the GPCR group by count) with `NOT ('Olfactory receptors' IN UNNEST(gene_group_names))` and restrict to `locus_type = 'gene with protein product'`.
 
+### variant_annotation
+
+Per-variant functional annotations for FinnGen (R14). This is the same data the genetics-results-api serves at `/variant_annotation/finngen`, loaded from the identical tabix source (`R14_annotated_variants_v0.small.gz`) so BigQuery agents can filter variants by functional consequence (`most_severe`, `gene_most_severe`) without going through the API. One row per variant. `chr` is already numeric in the source (X=23), so no chr-string conversion is applied on load. The `variant_annotation_v` view adds a constant `resource = 'finngen'` (single-source table, so no dataset-derived CASE and not part of the datasets.yaml resource linting).
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| variant | STRING | No | Variant identifier (chr:pos:ref:alt, GRCh38) |
+| chr | INT64 | Yes | Chromosome (X=23) |
+| pos | INT64 | Yes | Position (1-based, GRCh38) |
+| ref | STRING | Yes | Reference allele |
+| alt | STRING | Yes | Alternate allele |
+| INFO | FLOAT64 | No | Imputation INFO score |
+| AF | FLOAT64 | No | Alternate allele frequency in FinnGen |
+| AC_Het | INT64 | No | Heterozygous genotype count in FinnGen |
+| AC_Hom | INT64 | No | Homozygous (alt) genotype count in FinnGen |
+| most_severe | STRING | No | Most severe variant consequence (VEP) |
+| gene_most_severe | STRING | No | Gene of the most severe consequence |
+| rsid | STRING | No | dbSNP rsID |
+| EXOME_enrichment_nfe | FLOAT64 | No | Finnish vs non-Finnish European (NFE) enrichment, gnomAD exomes |
+| GENOME_enrichment_nfe | FLOAT64 | No | Finnish vs non-Finnish European (NFE) enrichment, gnomAD genomes |
+| index | INT64 | No | Row index in the source annotation file |
+
 ## Technical Implementation
 
 ### BigQuery Configuration
@@ -332,6 +354,11 @@ Configuration via environment variables:
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
 | PORT | 8080 | API server port |
 | DATASETS_CONFIG_PATH | ./configs/datasets.yaml | Path to shared datasets YAML config |
+| CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
+
+CORS responses cannot use a wildcard origin: the API is configured with
+`allow_credentials=True`, and browsers reject `Access-Control-Allow-Origin: *` on
+credentialed requests. Set `CORS_ORIGINS` to the exact origins of any browser client.
 
 ## Project Structure
 
@@ -353,7 +380,9 @@ genetics-results-db/
 │   ├── open_chromatin.sql             # Open-chromatin atlas table (accessible regions by cell type/tissue/condition)
 │   ├── open_chromatin_v.sql           # View with resource column
 │   ├── variant_effect.sql             # Predicted variant-effect table (ChromBPNet/FLARE scores; stored variant column)
-│   └── variant_effect_v.sql           # View with resource column
+│   ├── variant_effect_v.sql           # View with resource column
+│   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
+│   └── variant_annotation_v.sql       # View with constant resource='finngen'
 ├── scripts/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
@@ -366,6 +395,7 @@ genetics-results-db/
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_variant_effect.sh # Load predicted variant effects (marderstein chrombpnet+flare; chr-string→INT64 conversion, truncate+append)
+│   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
@@ -436,6 +466,12 @@ genetics-results-db/
    ```
    `build_gene_annotations.py` joins the HGNC complete-set, GENCODE v49 coordinates, and the three HGNC gene-group CSVs from GCS `mapping_files/` into a single NEWLINE_DELIMITED_JSON file (required to carry the `gene_group_ids`/`gene_group_names` REPEATED array columns, which the CSV loader cannot populate), which `load_data.py` then loads with `WRITE_TRUNCATE`. The provenance columns `gencode_version`, `hgnc_version`, and `download_date` are stamped at build time. This table has no streaming/incremental load; rerun the script to refresh.
 
+7. **Load FinnGen variant annotations** (same source the API serves; full refresh via `WRITE_TRUNCATE`):
+   ```bash
+   ./scripts/load_variant_annotation.sh
+   ```
+   Defaults to `gs://finngen-commons/results_api_data/variant_annotations/R14_annotated_variants_v0.small.gz`. Override `GCS_BUCKET`, `GCS_PREFIX`, or `VA_FILE` for other bucket layouts (e.g. `GCS_BUCKET=daly-genetics-results GCS_PREFIX=""`).
+
 ### API deployment
 
 The API is **not** deployed from this repo. The container image (`Dockerfile`) is
@@ -477,6 +513,22 @@ FROM gene_burden_results
 WHERE mlog10p_burden > 5
 ORDER BY mlog10p_burden DESC
 LIMIT 100
+```
+
+### Functional annotation for specific variants
+```sql
+SELECT variant, rsid, most_severe, gene_most_severe, AF, INFO
+FROM variant_annotation
+WHERE variant IN ('19:44908684:T:C', '1:13668:G:A')
+```
+
+### Coding variants in a gene
+```sql
+SELECT variant, rsid, most_severe, AF
+FROM variant_annotation
+WHERE gene_most_severe = 'APOE'
+  AND most_severe IN ('missense_variant', 'frameshift_variant', 'stop_gained')
+ORDER BY AF DESC
 ```
 
 ### Genes in a gene group (any-group enumeration with coordinates)
