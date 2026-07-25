@@ -90,6 +90,15 @@ MAX_BYTES_BILLED = int(os.environ.get("MAX_BYTES_BILLED", str(100 * 1024**3)))  
 
 bq_client = bigquery.Client(project=PROJECT_ID)
 
+
+def _internal_job_config() -> bigquery.QueryJobConfig:
+    """Cost cap for the service's own queries (/schema, /stats, /tables/{t}/sample).
+
+    Only /query used to carry maximum_bytes_billed, so the endpoints that scan whole
+    views on a cache miss were uncapped and could be driven in a loop.
+    """
+    return bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_BILLED)
+
 # expose views (not underlying tables) so AI agents use the enriched schemas
 VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "variant_annotation_v"]
 # map base table names to views for backwards-compatible query auto-qualification
@@ -160,7 +169,7 @@ def _get_categorical_values(view_name: str) -> dict[str, Any]:
         agg = ", ".join(f"ARRAY_AGG(DISTINCT {c} IGNORE NULLS) AS {c}" for c in flat_cols)
         sql = f"SELECT {agg} FROM {fq}"
         try:
-            row = next(iter(bq_client.query(sql).result()))
+            row = next(iter(bq_client.query(sql, job_config=_internal_job_config()).result()))
             for c in flat_cols:
                 result[c] = sorted(row[c] or [])
         except Exception as e:
@@ -174,7 +183,7 @@ def _get_categorical_values(view_name: str) -> dict[str, Any]:
         agg = ", ".join(f"ARRAY_AGG(DISTINCT {c} IGNORE NULLS) AS {c}" for c in cols)
         sql = f"SELECT {dep}, {agg} FROM {fq} WHERE {dep} IS NOT NULL GROUP BY {dep}"
         try:
-            for row in bq_client.query(sql).result():
+            for row in bq_client.query(sql, job_config=_internal_job_config()).result():
                 key = row[dep]
                 for c in cols:
                     result.setdefault(f"{c}_by_{dep}", {})[key] = sorted(row[c] or [])
@@ -291,17 +300,59 @@ def _estimate_bq_cost(bytes_processed: int) -> float:
     return round((bytes_processed / (1024**4)) * 6.25, 6)
 
 
-def sanitize_query(sql: str) -> str:
-    """Basic query sanitization - ensure read-only operations."""
-    sql_upper = sql.upper().strip()
+# tables a caller may reference: the exposed views plus the base tables they wrap
+# (BigQuery may report either in a dry run's referencedTables for a view query).
+_ALLOWED_TABLE_IDS = {
+    f"{PROJECT_ID}.{DATASET_ID}.{name}" for name in (*VIEWS, *_BASE_TABLES)
+}
 
-    # block write operations
-    forbidden = ["INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "MERGE"]
-    for keyword in forbidden:
-        if keyword in sql_upper.split():
-            raise HTTPException(status_code=400, detail=f"Write operations not allowed: {keyword}")
 
-    return sql
+def authorize_query(sql: str, job_config: bigquery.QueryJobConfig) -> "bigquery.QueryJob":
+    """Dry-run `sql` and reject it unless it is a plain read of the exposed tables.
+
+    Replaces the previous keyword blocklist, which only inspected whitespace-delimited
+    tokens and so let `EXECUTE IMMEDIATE`, `EXPORT DATA`, `CALL`, `LOAD` and `GRANT`
+    through, and never constrained *which* tables a SELECT could read (project-level
+    bigquery.dataViewer means that was every dataset in the project).
+
+    BigQuery itself parses the statement here, so there is no pattern to evade: the
+    dry run reports the real statement type and the real set of referenced tables.
+    Returns the completed dry-run job so the caller can reuse its cost estimate.
+    """
+    dry_config = bigquery.QueryJobConfig(
+        maximum_bytes_billed=job_config.maximum_bytes_billed,
+        dry_run=True,
+        use_query_cache=False,
+    )
+    try:
+        probe = bq_client.query(sql, job_config=dry_config)
+    except BadRequest as e:
+        raise HTTPException(status_code=400, detail=f"Invalid query: {e.message}")
+
+    statement_type = probe.statement_type
+    if statement_type != "SELECT":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Only single SELECT statements are allowed (got {statement_type or 'unknown'}). "
+                "Scripts, DDL, DML and EXPORT are rejected."
+            ),
+        )
+
+    referenced = {
+        f"{t.project}.{t.dataset_id}.{t.table_id}" for t in (probe.referenced_tables or [])
+    }
+    disallowed = sorted(referenced - _ALLOWED_TABLE_IDS)
+    if disallowed:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Query references tables outside the exposed set: {disallowed}. "
+                f"Available: {sorted(VIEWS)}"
+            ),
+        )
+
+    return probe
 
 
 @app.get("/health")
@@ -413,7 +464,7 @@ async def get_schema(table: str | None = None):
 async def execute_query(request: QueryRequest):
     """Execute a SQL query against the genetics database."""
     start_time = time.perf_counter()
-    sql = sanitize_query(request.sql)
+    sql = request.sql
 
     # auto-qualify table names and redirect base table names to views
     for view in VIEWS:
@@ -432,11 +483,13 @@ async def execute_query(request: QueryRequest):
         dry_run=request.dry_run,
     )
 
-    try:
-        query_job = bq_client.query(sql, job_config=job_config)
+    # BigQuery parses the statement and reports its type and referenced tables; anything
+    # that is not a plain SELECT over the exposed views is rejected before it can run
+    probe = authorize_query(sql, job_config)
 
+    try:
         if request.dry_run:
-            bytes_processed = query_job.total_bytes_processed
+            bytes_processed = probe.total_bytes_processed
             logger.info({
                 "message": "query",
                 "log_type": "endpoint_access",
@@ -455,6 +508,7 @@ async def execute_query(request: QueryRequest):
                 truncated=False,
             )
 
+        query_job = bq_client.query(sql, job_config=job_config)
         results = query_job.result()
         rows = []
         columns = [field.name for field in results.schema]
@@ -515,7 +569,7 @@ async def get_sample(table_name: str, limit: int = 10):
     limit = min(limit, 100)
     sql = f"SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.{resolved}` LIMIT {limit}"
 
-    query_job = bq_client.query(sql)
+    query_job = bq_client.query(sql, job_config=_internal_job_config())
     results = query_job.result()
 
     columns = [field.name for field in results.schema]
@@ -559,7 +613,7 @@ async def get_stats():
         GROUP BY dataset, data_type
         ORDER BY count DESC
         """
-        results = bq_client.query(sql).result()
+        results = bq_client.query(sql, job_config=_internal_job_config()).result()
         stats["credible_sets_by_source"] = [
             {"dataset": row.dataset, "data_type": row.data_type, "count": row.count}
             for row in results
