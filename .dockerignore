@@ -1,0 +1,10 @@
+# keep local secrets and caches out of the build context / published image
+.env
+.env.*
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.beads/
