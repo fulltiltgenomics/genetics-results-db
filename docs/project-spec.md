@@ -481,6 +481,18 @@ loaders, and API code only.
 
 ## Example Queries
 
+The examples the API serves to clients (returned per view by `/schema`, rendered in
+the browser's schema drawer and given to the LLM) live under `tables.<view>.examples`
+in `configs/datasets.yaml` — edit them in the canonical
+`../genetics-results-suite/configs/datasets.yaml` and sync. They are derived from
+queries actually run against the deployment and encode the pitfalls seen there:
+filter `chr` alongside `variant` for partition pruning, look up `trait_original`
+codes before filtering, take the top-PIP row per `cs_id` for lead variants, test
+region overlap (`region_start_min`/`region_end_max`) in `colocalization_v`, match
+both `trait1` and `trait2`, and join `coloc_credsets_v` on `(cs_id, dataset)`.
+
+The queries below are ad-hoc examples against the base tables.
+
 ### Genes with multiple high-confidence coding variants
 ```sql
 SELECT gene_most_severe, COUNT(*) as n
@@ -494,7 +506,7 @@ ORDER BY n DESC
 
 ### Strong colocalizations (H4 > 0.9)
 ```sql
-SELECT * FROM colocalization WHERE h4 > 0.9 LIMIT 100
+SELECT * FROM colocalization WHERE PP_H4_abf > 0.9 LIMIT 100
 ```
 
 ### Exome variants in a gene
