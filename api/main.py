@@ -160,7 +160,7 @@ def _internal_job_config() -> bigquery.QueryJobConfig:
     return bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_BILLED)
 
 # expose views (not underlying tables) so AI agents use the enriched schemas
-VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "variant_annotation_v", "peak_to_gene_v"]
+VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "asm_qtl_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "mpra_v", "variant_annotation_v", "peak_to_gene_v"]
 # map base table names to views for backwards-compatible query auto-qualification
 _BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
 
