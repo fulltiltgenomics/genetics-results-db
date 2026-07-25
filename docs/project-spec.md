@@ -276,6 +276,8 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 - `max_rows` (default 1000, max 100000): Maximum rows to return
 - `dry_run` (default false): Estimate query cost without executing
 
+Every query is authorized before it runs (see Security → Query authorization). Rejections are 400 for a non-`SELECT` statement or a syntax error, 403 for a `SELECT` that references a table outside the exposed views.
+
 ### Query Response Format
 
 ```json
@@ -323,10 +325,28 @@ BigQuery cost is estimated at $6.25 per TiB (on-demand pricing). Noisy loggers (
 
 ### Security
 
-- Write operations blocked (INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE, MERGE)
-- Maximum bytes billed limit
-- Table names auto-qualified to prevent injection
+#### Query authorization
+
+`/query` submits every statement as a **BigQuery dry run first** (`authorize_query`), and only runs it for real if the dry run passes two checks:
+
+1. **`statementType` must be `SELECT`.** Anything else — DDL, DML, `EXECUTE IMMEDIATE`, `EXPORT DATA`, `CALL`, `LOAD`, `GRANT`, or a multi-statement script — is rejected with 400.
+2. **Every entry in `referencedTables` must be an exposed view or the base table it wraps** (`_ALLOWED_TABLE_IDS`). Anything else is rejected with 403, listing the disallowed tables and the available views.
+
+This replaced a keyword blocklist that scanned whitespace-delimited tokens. That approach was evadable — `EXECUTE IMMEDIATE`, `EXPORT DATA`, `CALL` and `LOAD` were not in the list at all, and comment/newline tricks broke tokenisation — and it never constrained *which* tables a `SELECT` could read. Since the API service account holds project-level `bigquery.dataViewer`, an unconstrained `SELECT` could read every dataset in the project, and `EXPORT DATA` could write results to GCS. Letting BigQuery parse the statement leaves nothing to pattern-match against: the dry run reports the real statement type and the real table set.
+
+Notes:
+
+- The dry-run job is created **outside** the endpoint's `try`/`except Exception` block, so its 400/403 reaches the client instead of being converted to a 500.
+- When the caller passes `dry_run: true`, the authorization probe *is* the estimate — its `total_bytes_processed` is returned directly, so no second job is submitted.
+- `referencedTables` for a view query may name the view, its base table, or both, depending on how BigQuery expands it; both forms are in the allow-list.
+- The allow-list is derived from `VIEWS`, so adding a view exposes it automatically. A table that is loaded but has no view is **not** queryable through `/query`.
+
+#### Other controls
+
+- `maximum_bytes_billed` on every BigQuery job, including the internal ones behind `/schema`, `/stats` and `/tables/{name}/sample` (previously uncapped, so a large table could run up an unbounded scan)
+- Table names auto-qualified, and bare view names resolved via `_BASE_TABLES`
 - IAM-level read-only enforcement on the API service account (see IAM Roles below)
+- No authentication: the API is reachable by anything that can route to it, and relies on the cluster NetworkPolicy for isolation (see To Be Implemented)
 
 ### IAM Roles
 
@@ -564,7 +584,7 @@ Filters to cis colocalizations (QTL lead variant within ±1 Mb of the gene). Dro
 
 ## To Be Implemented
 
-1. Authentication/authorization for external access (API keys, OAuth, etc.)
+1. Authentication for external access (API keys, OAuth, etc.). The API is currently unauthenticated and protected only by the cluster NetworkPolicy; mcp-server sits on both sides of that boundary, so anything that can reach mcp-server can reach the query endpoint through it.
 2. Rate limiting for query endpoint
 3. Query result caching for repeated queries
 4. Possibly additional endpoints for common query patterns (variant lookup, gene lookup)
