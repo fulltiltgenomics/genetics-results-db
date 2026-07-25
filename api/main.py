@@ -3,6 +3,7 @@ Genetics Results API - BigQuery query service for AI agents.
 Provides SQL query interface to genetics fine-mapping and colocalization data.
 """
 
+import hmac
 import json
 import os
 import logging
@@ -11,8 +12,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from google.cloud import bigquery
 from google.api_core.exceptions import BadRequest, Forbidden
@@ -59,11 +62,68 @@ logger = logging.getLogger(__name__)
 for _name in ("uvicorn.access", "google", "urllib3", "asyncio"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
+
+# kubelet probes and the monitor CronJob poll /health with no credentials
+_UNAUTHENTICATED_PATHS = {"/health"}
+
+
+def require_auth(request: Request) -> None:
+    """Require the shared internal secret on every endpoint except /health.
+
+    This service has no user-facing identity: its only callers are chat-backend and
+    mcp-server, which already send `Authorization: Bearer $INTERNAL_API_SECRET` on every
+    request. Before this the sole control was the cluster NetworkPolicy, and mcp-server sits
+    on both sides of that boundary — anything able to reach mcp-server could reach BigQuery
+    through it.
+
+    Deliberately fails open when the secret is unset, so a cluster that has not yet wired the
+    env var keeps serving rather than hard-failing mid-rollout. The startup warning below is
+    the signal that an instance is running unprotected.
+    """
+    if not INTERNAL_API_SECRET or request.url.path in _UNAUTHENTICATED_PATHS:
+        return
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer ") or not hmac.compare_digest(
+        auth_header[7:], INTERNAL_API_SECRET
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+if not INTERNAL_API_SECRET:
+    logger.warning(
+        "INTERNAL_API_SECRET is not set: every endpoint is reachable without authentication"
+    )
+
 app = FastAPI(
     title="Genetics Results API",
     description="Query interface for genetics fine-mapping and colocalization data",
     version="1.0.0",
+    dependencies=[Depends(require_auth)],
+    # FastAPI mounts its docs with add_route, which bypasses app-level dependencies — the
+    # schema would stay readable on an otherwise authenticated service. Re-declared below as
+    # ordinary routes so they inherit require_auth (and still work locally, where it no-ops).
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
+
+_OPENAPI_URL = "/openapi.json"
+
+
+@app.get(_OPENAPI_URL, include_in_schema=False)
+async def openapi_schema():
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui():
+    return get_swagger_ui_html(openapi_url=_OPENAPI_URL, title=f"{app.title} - Swagger UI")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_ui():
+    return get_redoc_html(openapi_url=_OPENAPI_URL, title=f"{app.title} - ReDoc")
 
 # browsers reject a wildcard Access-Control-Allow-Origin on credentialed requests,
 # so allowed origins must be listed explicitly

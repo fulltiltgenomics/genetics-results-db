@@ -325,6 +325,16 @@ BigQuery cost is estimated at $6.25 per TiB (on-demand pricing). Noisy loggers (
 
 ### Security
 
+#### Authentication
+
+Every endpoint except `/health` requires `Authorization: Bearer $INTERNAL_API_SECRET` — the same shared secret chat-backend and mcp-server already send on every call, so no client change was needed. The comparison is constant-time (`hmac.compare_digest`).
+
+`/health` is exempt because kubelet probes and the monitor CronJob poll it without credentials. FastAPI mounts `/docs`, `/redoc` and `/openapi.json` with `add_route`, which bypasses app-level dependencies, so those three are re-declared as ordinary routes and are authenticated too.
+
+**Fails open when `INTERNAL_API_SECRET` is unset**, logging a startup warning, so local development works unchanged and a cluster mid-rollout doesn't hard-fail. In the deployment the env var comes from the `genetics-secrets/internal-api-secret` key, which `create-secrets.sh` always populates.
+
+This was the only access control besides the cluster NetworkPolicy, which is not sufficient on its own: mcp-server is allowed to reach db-api *and* is itself reachable from outside the boundary, so anything that could drive mcp-server could reach BigQuery through it.
+
 #### Query authorization
 
 `/query` submits every statement as a **BigQuery dry run first** (`authorize_query`), and only runs it for real if the dry run passes two checks:
@@ -346,7 +356,6 @@ Notes:
 - `maximum_bytes_billed` on every BigQuery job, including the internal ones behind `/schema`, `/stats` and `/tables/{name}/sample` (previously uncapped, so a large table could run up an unbounded scan)
 - Table names auto-qualified, and bare view names resolved via `_BASE_TABLES`
 - IAM-level read-only enforcement on the API service account (see IAM Roles below)
-- No authentication: the API is reachable by anything that can route to it, and relies on the cluster NetworkPolicy for isolation (see To Be Implemented)
 
 ### IAM Roles
 
@@ -375,6 +384,7 @@ Configuration via environment variables:
 | PORT | 8080 | API server port |
 | DATASETS_CONFIG_PATH | ./configs/datasets.yaml | Path to shared datasets YAML config |
 | CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
+| INTERNAL_API_SECRET | (unset) | Shared secret required as `Authorization: Bearer` on every endpoint except `/health`. Unset disables authentication entirely (logs a warning at startup) |
 
 CORS responses cannot use a wildcard origin: the API is configured with
 `allow_credentials=True`, and browsers reject `Access-Control-Allow-Origin: *` on
@@ -584,7 +594,7 @@ Filters to cis colocalizations (QTL lead variant within ±1 Mb of the gene). Dro
 
 ## To Be Implemented
 
-1. Authentication for external access (API keys, OAuth, etc.). The API is currently unauthenticated and protected only by the cluster NetworkPolicy; mcp-server sits on both sides of that boundary, so anything that can reach mcp-server can reach the query endpoint through it.
+1. Per-user authentication for external access (OAuth, per-caller API keys). The current shared secret authenticates the *service*, not the user behind the request, so it cannot support per-user authorization or attribution.
 2. Rate limiting for query endpoint
 3. Query result caching for repeated queries
 4. Possibly additional endpoints for common query patterns (variant lookup, gene lookup)
