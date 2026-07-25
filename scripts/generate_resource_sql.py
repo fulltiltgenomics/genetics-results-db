@@ -29,6 +29,7 @@ ALL_VIEWS = [
     "open_chromatin_v",
     "variant_effect_v",
     "mpra_v",
+    "peak_to_gene_v",
 ]
 
 # colocalization_v maps dataset1->resource1 and dataset2->resource2

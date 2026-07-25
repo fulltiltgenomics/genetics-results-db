@@ -287,6 +287,36 @@ SCHEMAS = {
         bigquery.SchemaField("GENOME_enrichment_nfe", "FLOAT64"),
         bigquery.SchemaField("index", "INT64"),
     ],
+    # column order must match TSV file exactly (the Open4Gene results the tabix API
+    # serves at /peak_to_genes: chrom, start, end, peak_id, gene_id, symbol, cell_type,
+    # total_cell_num, expr_cell_num, open_cell_num, hurdle_*). The source chrom is
+    # "chr1".."chrX", loaded to the INT64 `chr` column via CHR_STRING_TABLES staging,
+    # and cell_type is prefixed ("predicted.celltype.l1.B"), stripped via
+    # CELL_TYPE_PREFIX_TABLES so it joins credible_sets.cell_type. `dataset` is not in
+    # the file — injected at load with --const-column dataset=FinnGen_ATACseq.
+    "peak_to_gene": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("peak_start", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("peak_end", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("peak_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("symbol", "STRING"),
+        bigquery.SchemaField("cell_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("total_cell_num", "INT64"),
+        bigquery.SchemaField("expr_cell_num", "INT64"),
+        bigquery.SchemaField("open_cell_num", "INT64"),
+        bigquery.SchemaField("hurdle_zero_beta", "FLOAT64"),
+        bigquery.SchemaField("hurdle_zero_se", "FLOAT64"),
+        bigquery.SchemaField("hurdle_zero_z", "FLOAT64"),
+        bigquery.SchemaField("hurdle_zero_nlog10p", "FLOAT64"),
+        bigquery.SchemaField("hurdle_count_beta", "FLOAT64"),
+        bigquery.SchemaField("hurdle_count_se", "FLOAT64"),
+        bigquery.SchemaField("hurdle_count_z", "FLOAT64"),
+        bigquery.SchemaField("hurdle_count_nlog10p", "FLOAT64"),
+        bigquery.SchemaField("hurdle_aic", "FLOAT64"),
+        bigquery.SchemaField("hurdle_bic", "FLOAT64"),
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
@@ -299,7 +329,15 @@ JSON_SCHEMAS = {"gene_annotations"}
 # tables are always routed through the staging path: `chr` is loaded as STRING, then
 # converted to INT64 on projection. The conversion still tolerates a legacy "chr"
 # prefix and X/Y/M spellings so mixed inputs load consistently.
-CHR_STRING_TABLES = {"open_chromatin", "variant_effect", "mpra"}
+CHR_STRING_TABLES = {"open_chromatin", "variant_effect", "mpra", "peak_to_gene"}
+
+# tables whose source `cell_type` carries the Open4Gene "predicted.celltype." prefix while
+# every other table (credible_sets in particular) stores the bare form ("l1.B"). The prefix
+# is stripped on projection so peak_to_gene joins credible_sets on cell_type by equality —
+# the tabix API strips the same prefix at read time. Routed through the staging path.
+CELL_TYPE_PREFIX_TABLES = {"peak_to_gene"}
+
+CELL_TYPE_STRIP_PREFIX_SQL = "REGEXP_REPLACE({col}, r'^predicted\\.celltype\\.', '')"
 
 # SQL to normalize a chrom string to the INT64 encoding used across the tables:
 # X=23, Y=24, M/MT=25 (mirrors chrom_to_int() in build_gene_annotations.py).
@@ -352,16 +390,19 @@ def load_table(
     full_schema = SCHEMAS[table_type]
     const_columns = const_columns or {}
     convert_chr = table_type in CHR_STRING_TABLES
+    strip_cell_type_prefix = table_type in CELL_TYPE_PREFIX_TABLES
 
-    if table_type in JSON_SCHEMAS and (const_columns or convert_chr):
-        # const-column injection / chr conversion rely on a CSV staging table;
+    if table_type in JSON_SCHEMAS and (
+        const_columns or convert_chr or strip_cell_type_prefix
+    ):
+        # const-column injection / column rewrites rely on a CSV staging table;
         # they are not wired up for the JSON load path (no current JSON table needs it)
         raise ValueError(
-            f"staging-path load (const-column / chr conversion) is not supported "
+            f"staging-path load (const-column / column rewrite) is not supported "
             f"for JSON-loaded table '{table_type}'"
         )
 
-    needs_staging = bool(const_columns) or convert_chr
+    needs_staging = bool(const_columns) or convert_chr or strip_cell_type_prefix
 
     if not needs_staging:
         # direct-load path: no constant columns to inject, no chr conversion
@@ -430,6 +471,11 @@ def load_table(
                 params.append(bigquery.ScalarQueryParameter(pname, f.field_type, py_value))
             elif convert_chr and f.name == "chr":
                 col_exprs.append(CHR_STRING_TO_INT_SQL.format(col="`chr`") + " AS `chr`")
+            elif strip_cell_type_prefix and f.name == "cell_type":
+                col_exprs.append(
+                    CELL_TYPE_STRIP_PREFIX_SQL.format(col="`cell_type`")
+                    + " AS `cell_type`"
+                )
             else:
                 col_exprs.append(f"`{f.name}`")
 

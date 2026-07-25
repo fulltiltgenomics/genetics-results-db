@@ -219,6 +219,43 @@ Required columns are NOT NULL in the DDL because they never contain NA: HGNC cor
 
 **Gene-group lineage.** `gene_group_ids` and `gene_group_names` are full-lineage arrays: each gene's leaf group(s) plus all ancestor groups in the HGNC hierarchy. The arrays are built from three HGNC-native CSV files — `hgnc_gene_has_family.csv` (gene → leaf group), `hgnc_hierarchy_closure.csv` (which is already transitive, expanding each child group to all of its ancestors), and `hgnc_family.csv` (group ID → name). Because the lineage is precomputed, membership in *any* group (leaf or ancestor) is queryable directly with `<group_id> IN UNNEST(gene_group_ids)`, with no recursive join needed. **HGNC id format**: `hgnc_gene_has_family.csv` keys genes by BARE numeric id (`3023`) while `hgnc_complete_set.txt` uses the prefixed `HGNC:3023` form; the build canonicalizes both to `HGNC:NNNN` (via `canonical_hgnc_id`) before joining. Without this the gene→family join silently misses for every gene, leaving all `gene_group_*` arrays empty — so after any rebuild, sanity-check that `COUNTIF(ARRAY_LENGTH(gene_group_ids) > 0) > 0`. For GPCR-type analyses, exclude olfactory receptors (which dominate the GPCR group by count) with `NOT ('Olfactory receptors' IN UNNEST(gene_group_names))` and restrict to `locus_type = 'gene with protein product'`.
 
+### peak_to_gene
+
+Open4Gene peak-to-gene links from the FinnGen ATAC-seq study: which genes a chromatin peak's accessibility is associated with, in which cell type. One row per (peak, gene, cell type), ~1.07M rows over 112,032 peaks and 12,445 genes across 33 cell types. Only significant links are published, so a missing row means no significant link was found, not evidence against one.
+
+**Why the table exists.** caQTL rows in `credible_sets` carry a PEAK id in `trait` (e.g. `chr5-35482826-35484273`), not a gene, so no gene-based caQTL question is answerable from `credible_sets` alone. This table is the join that makes it one:
+
+```sql
+SELECT l.symbol, cs.cell_type, cs.trait AS peak_id, cs.cs_id, cs.pos, cs.pip
+FROM credible_sets_v cs
+JOIN peak_to_gene_v l ON l.peak_id = cs.trait AND l.cell_type = cs.cell_type
+WHERE cs.data_type = 'caQTL' AND l.symbol = 'IL7R'
+```
+
+Dropping the `cell_type` predicate gives the cell-type-agnostic, peak-level answer. Approximating the link by comparing peak and gene coordinates does not work: linked peaks sit up to ~1 Mb from the gene, and most peaks near a gene are not linked to it (for IL7R, a ±500 kb window contains 84 peaks with credible sets, of which 25 are actually linked).
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| chr | INT64 | Yes | Chromosome (GRCh38; X encoded as 23) |
+| peak_start | INT64 | Yes | Peak start position (0-based BED start) |
+| peak_end | INT64 | Yes | Peak end position |
+| peak_id | STRING | Yes | Peak identifier as chr-start-end; joins `credible_sets.trait` for caQTL rows |
+| gene_id | STRING | Yes | Linked gene Ensembl ID (no version suffix) |
+| symbol | STRING | No | Linked gene symbol |
+| cell_type | STRING | Yes | Cell type the link was found in (e.g. `l1.CD4_T`); joins `credible_sets.cell_type` |
+| total_cell_num | INT64 | No | Total number of cells in the analysis |
+| expr_cell_num | INT64 | No | Number of cells expressing the gene |
+| open_cell_num | INT64 | No | Number of cells with the peak accessible |
+| hurdle_zero_beta / _se / _z / _nlog10p | FLOAT64 | No | Zero (detection) component of the hurdle model |
+| hurdle_count_beta / _se / _z / _nlog10p | FLOAT64 | No | Count (expression-level) component of the hurdle model |
+| hurdle_aic | FLOAT64 | No | Akaike information criterion of the fitted model |
+| hurdle_bic | FLOAT64 | No | Bayesian information criterion of the fitted model |
+| dataset | STRING | Yes | Source dataset (constant `FinnGen_ATACseq`, matching `credible_sets.dataset`) |
+
+**Two normalizations happen at load time**, both so the join is a plain equality rather than a rewrite at query time: the source chrom is `chr1`..`chrX` and is converted to INT64 (`CHR_STRING_TABLES`), and the source `cell_type` carries a `predicted.celltype.` prefix that `credible_sets` does not, which is stripped (`CELL_TYPE_PREFIX_TABLES`). The tabix API strips the same prefix at read time. Unlike the other tables this one is unpartitioned (it is small) and clustered by `symbol` first, since gene-keyed lookup is the dominant access pattern. When the gene's chromosome is known, adding a literal `cs.chr = <n>` to the join prunes `credible_sets` partitions and cuts the scan by an order of magnitude.
+
+The same links are served by the genetics-results-api as `/peak_to_genes/{peak_id}` and `/gene_to_peaks/{gene}`, from the same source file.
+
 ### variant_annotation
 
 Per-variant functional annotations for FinnGen (R14). This is the same data the genetics-results-api serves at `/variant_annotation/finngen`, loaded from the identical tabix source (`R14_annotated_variants_v0.small.gz`) so BigQuery agents can filter variants by functional consequence (`most_severe`, `gene_most_severe`) without going through the API. One row per variant. `chr` is already numeric in the source (X=23), so no chr-string conversion is applied on load. The `variant_annotation_v` view adds a constant `resource = 'finngen'` (single-source table, so no dataset-derived CASE and not part of the datasets.yaml resource linting).
@@ -409,6 +446,8 @@ genetics-results-db/
 │   ├── gene_annotations_v.sql         # View with resource column
 │   ├── open_chromatin.sql             # Open-chromatin atlas table (accessible regions by cell type/tissue/condition)
 │   ├── open_chromatin_v.sql           # View with resource column
+│   ├── peak_to_gene.sql               # Open4Gene peak→gene links (joins peak-keyed caQTL results to genes)
+│   ├── peak_to_gene_v.sql             # View with resource column
 │   ├── variant_effect.sql             # Predicted variant-effect table (ChromBPNet/FLARE scores; stored variant column)
 │   ├── variant_effect_v.sql           # View with resource column
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
@@ -424,6 +463,7 @@ genetics-results-db/
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results (BipEx, IBD, SCHEMA2)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
+│   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)
 │   ├── load_variant_effect.sh # Load predicted variant effects (marderstein chrombpnet+flare; chr-string→INT64 conversion, truncate+append)
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
@@ -496,7 +536,13 @@ genetics-results-db/
    ```
    `build_gene_annotations.py` joins the HGNC complete-set, GENCODE v49 coordinates, and the three HGNC gene-group CSVs from GCS `mapping_files/` into a single NEWLINE_DELIMITED_JSON file (required to carry the `gene_group_ids`/`gene_group_names` REPEATED array columns, which the CSV loader cannot populate), which `load_data.py` then loads with `WRITE_TRUNCATE`. The provenance columns `gencode_version`, `hgnc_version`, and `download_date` are stamped at build time. This table has no streaming/incremental load; rerun the script to refresh.
 
-7. **Load FinnGen variant annotations** (same source the API serves; full refresh via `WRITE_TRUNCATE`):
+7. **Load Open4Gene peak-to-gene links** (full refresh via `WRITE_TRUNCATE`):
+   ```bash
+   ./scripts/load_peak_to_gene.sh
+   ```
+   Reads `gs://<bucket>/<prefix>atacseq/open4gene.all.results.sig.tsv.gz` — the same file the API serves — and injects `dataset=FinnGen_ATACseq` so the table joins `credible_sets` directly. Defaults to `GCS_BUCKET=finngen-commons`, `GCS_PREFIX=results_api_data/`; override with `GCS_BUCKET=daly-genetics-results GCS_PREFIX=""` for the daly layout.
+
+8. **Load FinnGen variant annotations** (same source the API serves; full refresh via `WRITE_TRUNCATE`):
    ```bash
    ./scripts/load_variant_annotation.sh
    ```

@@ -22,6 +22,8 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/load_asm_qtl.sh](scripts/load_asm_qtl.sh) loads ASM-QTL (allele-specific methylation) results
 
+[scripts/load_peak_to_gene.sh](scripts/load_peak_to_gene.sh) loads Open4Gene peak-to-gene links (truncates `peak_to_gene`), which join peak-keyed caQTL credible sets to genes
+
 ## Server setup
 
 Requires [uv](https://docs.astral.sh/uv/):
