@@ -28,6 +28,35 @@ QUALITY CODING RULES
 6. This should often be your first step in understanding a task.
 
 
+# Documentation ownership
+
+Changing a path on the left makes the doc on the right wrong until it is updated in
+the same commit. `scripts/check-doc-drift.sh` warns (never blocks) on commits that
+violate this; it runs from the `pre-commit` hook.
+
+| changed path | doc to update | what to check |
+|---|---|---|
+| `schemas/**` | `docs/project-spec.md` | data model column tables, partition/cluster clauses, view columns |
+| `api/**` | `docs/project-spec.md`, `README.md` | endpoint table, query parameters, env-var tables, authentication |
+| `scripts/load_*.sh`, `scripts/setup_bigquery.sh` | `README.md`, `docs/project-spec.md` | loader list, setup steps, GCS bucket/prefix defaults |
+| `configs/datasets.yaml` | `docs/project-spec.md` | dataset/resource config — this copy is generated, see below |
+
+A doc is stale the moment it *enumerates* something the code no longer matches.
+Counts and lists rot silently — table lists, endpoint tables, env-var tables, loader
+inventories — so re-derive them from the code rather than trusting them.
+
+
+# Cross-repo documentation
+
+`genetics-results-suite` is the spec of record for the suite as a whole. This repo
+documents only itself, so a change here can leave that repo's docs wrong in a way no
+doc or check in this repo can detect.
+
+Adding or changing a BigQuery view or table here also requires updating
+`../genetics-results-suite/docs/adding-datasets.md` (the `ALL_VIEWS` list) and
+`../genetics-results-suite/docs/project-spec.md`.
+
+
 # datasets.yaml (single source of truth)
 
 1. `configs/datasets.yaml` in THIS repo is a generated COPY, not the source of truth. The canonical file lives in `../genetics-results-suite/configs/datasets.yaml`, and that is the copy deployed (mounted as a k8s ConfigMap into both service pods).
