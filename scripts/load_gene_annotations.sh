@@ -18,7 +18,9 @@ ts() {
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-finngen-commons}"
-GCS_PREFIX="${GCS_PREFIX:-results_api_data/mapping_files/}"
+# no colon: only an UNSET prefix takes the default, so an explicitly empty
+# GCS_PREFIX="" is honored (for daly the mapping files live at mapping_files/)
+GCS_PREFIX="${GCS_PREFIX-results_api_data/mapping_files/}"
 
 GENCODE_VERSION="${GENCODE_VERSION:-49}"
 HGNC_VERSION="${HGNC_VERSION:?set HGNC_VERSION (e.g. 2026-06-01)}"

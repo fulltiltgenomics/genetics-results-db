@@ -534,7 +534,7 @@ genetics-results-db/
    ```bash
    HGNC_VERSION=2026-06-01 ./scripts/load_gene_annotations.sh
    ```
-   `build_gene_annotations.py` joins the HGNC complete-set, GENCODE v49 coordinates, and the three HGNC gene-group CSVs from GCS `mapping_files/` into a single NEWLINE_DELIMITED_JSON file (required to carry the `gene_group_ids`/`gene_group_names` REPEATED array columns, which the CSV loader cannot populate), which `load_data.py` then loads with `WRITE_TRUNCATE`. The provenance columns `gencode_version`, `hgnc_version`, and `download_date` are stamped at build time. This table has no streaming/incremental load; rerun the script to refresh.
+   `build_gene_annotations.py` joins the HGNC complete-set, GENCODE v49 coordinates, and the three HGNC gene-group CSVs from GCS `mapping_files/` into a single NEWLINE_DELIMITED_JSON file (required to carry the `gene_group_ids`/`gene_group_names` REPEATED array columns, which the CSV loader cannot populate), which `load_data.py` then loads with `WRITE_TRUNCATE`. The provenance columns `gencode_version`, `hgnc_version`, and `download_date` are stamped at build time. This table has no streaming/incremental load; rerun the script to refresh. Defaults to `GCS_BUCKET=finngen-commons`, `GCS_PREFIX=results_api_data/mapping_files/`; for the daly layout use `GCS_BUCKET=daly-genetics-results GCS_PREFIX=mapping_files/` (note this one is not the bucket root — the mapping files sit under `mapping_files/` in both buckets).
 
 7. **Load Open4Gene peak-to-gene links** (full refresh via `WRITE_TRUNCATE`):
    ```bash
