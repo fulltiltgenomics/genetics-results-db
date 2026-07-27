@@ -16,7 +16,8 @@ genetics-results-db is a BigQuery-based database solution for storing and queryi
 
 - BigQuery tables with partitioning by chromosome and clustering by dataset/data_type for typical queries
 - REST API (FastAPI) with human/agent usable endpoints for SQL queries, schema discovery, and statistics
-- Query sanitization to prevent write operations (though read-only access is recommended in any case)
+- Shared-secret authentication on every endpoint except `/health`
+- Query authorization via a BigQuery dry run: only single `SELECT` statements over the exposed views are executed (though read-only IAM is recommended in any case)
 - Cost controls via configurable bytes-billed limits and dry-run support
 - Direct loading of tsv.gz files from GCS with schema validation
 - Auto-qualification of table names in queries for simpler SQL (base table names are redirected to views)
@@ -37,8 +38,20 @@ BigQuery Dataset
   │   └── exome_variant_results_v (view: adds variant, resource columns)
   ├── gene_burden_results (partitioned by chr, clustered by dataset, gene, trait)
   │   └── gene_burden_results_v (view: adds resource column)
-  └── gene_annotations (unpartitioned reference table, clustered by symbol)
-      └── gene_annotations_v (view: adds resource column)
+  ├── asm_qtl (partitioned by chr, clustered by dataset, gene_most_severe, most_severe)
+  │   └── asm_qtl_v (view: adds variant, maf, resource columns)
+  ├── gene_annotations (unpartitioned reference table, clustered by symbol)
+  │   └── gene_annotations_v (view: adds resource column)
+  ├── open_chromatin (partitioned by chr, clustered by dataset, tissue, cell_type)
+  │   └── open_chromatin_v (view: adds resource column)
+  ├── variant_effect (partitioned by chr, clustered by dataset, tissue, model)
+  │   └── variant_effect_v (view: adds resource column)
+  ├── mpra (partitioned by chr, clustered by dataset, cell_line)
+  │   └── mpra_v (view: adds resource column)
+  ├── variant_annotation (partitioned by chr, clustered by most_severe, gene_most_severe)
+  │   └── variant_annotation_v (view: adds constant resource='finngen')
+  └── peak_to_gene (unpartitioned link table, clustered by symbol, cell_type, peak_id)
+      └── peak_to_gene_v (view: adds resource column)
       ↓
 API (FastAPI) — exposes only views, not underlying tables
       ↓
@@ -189,6 +202,34 @@ Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, 
 | trait_original | STRING | Yes | Original trait name in the respective dataset |
 | flags | STRING | No | Quality or analysis flags (NA if none) |
 
+### asm_qtl
+
+Allele-specific methylation QTL results from deCODE (Stefansson et al. 2024), from Oxford Nanopore whole-genome sequencing of 7,179 Icelandic samples. Associations between sequence variants and CpG methylation rates (`deCODE_asmQTL_CpG`) or methylation-depleted-sequence rates (`deCODE_asmQTL_MDS`). Only primary and secondary signals are released (see `variant_rank`); the source is already filtered to Bonferroni significance (~1e-12 CpG, ~1e-10 MDS), MAF > 1e-4, INFO > 0.9, and variant within 100 kb of the methylation target. The `dataset` column is not in the source TSVs and is injected at load time.
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| dataset | STRING | Yes | Source dataset (deCODE_asmQTL_CpG, deCODE_asmQTL_MDS) |
+| chr | INT64 | Yes | Chromosome |
+| pos | INT64 | Yes | Position |
+| ref | STRING | Yes | Reference allele |
+| alt | STRING | No | Alternate allele |
+| rsid | STRING | Yes | dbSNP rsID |
+| beta | FLOAT64 | Yes | Effect size |
+| se | FLOAT64 | Yes | Standard error |
+| mlog10p | FLOAT64 | Yes | -log10(p-value) |
+| af | FLOAT64 | Yes | Allele frequency |
+| maf | FLOAT64 | No | Minor allele frequency (view only, derived as LEAST(af, 1-af)) |
+| most_severe | STRING | No | Most severe variant consequence |
+| gene_most_severe | STRING | No | Gene with most severe consequence |
+| target_start | INT64 | Yes | Methylation target region start position |
+| target_end | INT64 | Yes | Methylation target region end position |
+| ref_methylrate | FLOAT64 | Yes | Methylation rate on reference haplotype |
+| alt_methylrate | FLOAT64 | Yes | Methylation rate on alternate haplotype |
+| n_haplotypes | INT64 | Yes | Number of haplotypes used in analysis |
+| variant_rank | STRING | Yes | Variant rank: primary or secondary |
+| ld_count | INT64 | No | Number of variants in LD with this variant |
+| vartype | STRING | Yes | Variant type: SNV, SV, etc. |
+
 ### gene_annotations
 
 Whole-universe gene reference table: one row per HGNC gene, covering the full gene universe (not filtered to results). Built from the HGNC complete-set joined to GENCODE v49 GRCh38 coordinates, with full-lineage HGNC gene-group arrays. Coordinates use GRCh38 with chromosome X encoded as 23 (Y as 24, M as 25), matching the integer chromosome convention of the other views.
@@ -218,6 +259,80 @@ This table is a `query_bigquery` surface only. Its primary purpose is enabling c
 Required columns are NOT NULL in the DDL because they never contain NA: HGNC core identity fields (`hgnc_id`, `symbol`, `name`, `locus_type` — always present in the complete set; `symbol` is also filtered during the build) and the build-stamped provenance columns. Coordinate/cross-reference columns (`chr`, `gene_start`, `gene_end`, `strand`, `ensembl_gene_id`, `ncbi_gene_id`) are NULLABLE because not every HGNC gene maps to GENCODE/Ensembl/NCBI. The gene-group arrays are REPEATED (an empty array, never NULL).
 
 **Gene-group lineage.** `gene_group_ids` and `gene_group_names` are full-lineage arrays: each gene's leaf group(s) plus all ancestor groups in the HGNC hierarchy. The arrays are built from three HGNC-native CSV files — `hgnc_gene_has_family.csv` (gene → leaf group), `hgnc_hierarchy_closure.csv` (which is already transitive, expanding each child group to all of its ancestors), and `hgnc_family.csv` (group ID → name). Because the lineage is precomputed, membership in *any* group (leaf or ancestor) is queryable directly with `<group_id> IN UNNEST(gene_group_ids)`, with no recursive join needed. **HGNC id format**: `hgnc_gene_has_family.csv` keys genes by BARE numeric id (`3023`) while `hgnc_complete_set.txt` uses the prefixed `HGNC:3023` form; the build canonicalizes both to `HGNC:NNNN` (via `canonical_hgnc_id`) before joining. Without this the gene→family join silently misses for every gene, leaving all `gene_group_*` arrays empty — so after any rebuild, sanity-check that `COUNTIF(ARRAY_LENGTH(gene_group_ids) > 0) > 0`. For GPCR-type analyses, exclude olfactory receptors (which dominate the GPCR group by count) with `NOT ('Olfactory receptors' IN UNNEST(gene_group_names))` and restrict to `locus_type = 'gene with protein product'`.
+
+### open_chromatin
+
+Atlas of accessible/active chromatin regions labeled by cell type, tissue and condition. One row per peak per context (LONG layout), region-indexed with no p-values: a row means the interval is open/active chromatin in that context, so queries overlap a position or region against `peak_start`/`peak_end`. Six source datasets (marderstein, li_brain_atac, catlas, epimap, calderon_immune, rosmap_brain) — filter on `resource`, not `dataset`. `start`/`end` are named `peak_start`/`peak_end` because `end` is a reserved word, and the source `chrom` string is converted to the INT64 `chr` encoding on load (`CHR_STRING_TABLES`). Scores are never unit-harmonized across datasets; `score_type` says what a score means.
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| peak_start | INT64 | Yes | Peak/region start position (0-based BED start) |
+| peak_end | INT64 | Yes | Peak/region end position |
+| peak_id | STRING | No | Source peak/element identifier |
+| dataset | STRING | Yes | Source dataset (e.g. marderstein_open_chromatin, catlas_open_chromatin) |
+| cell_type | STRING | No | Free-text source cell-type label (provenance only, not a join key) |
+| tissue | STRING | No | Harmonized tissue axis (e.g. brain, heart, immune) |
+| life_stage | STRING | No | Harmonized life stage (e.g. fetal, adult) |
+| condition | STRING | No | Harmonized condition (e.g. resting, stimulated, AD, control) |
+| assay | STRING | No | Assay type: scATAC, snATAC, bulk_ATAC, chromHMM |
+| score | FLOAT64 | No | Peak score/signal; NULL for presence-only baselines |
+| score_type | STRING | No | Categorical score type (e.g. presence, chromhmm_18state) |
+| n_cells | INT64 | No | Number of cells/nuclei supporting the peak, when available |
+| cell_ontology_id | STRING | No | Cell Ontology (CL) identifier, when available |
+| uberon_id | STRING | No | UBERON tissue identifier, when available |
+| target_gene | STRING | No | Linked target gene symbol (enhancer/cCRE-to-gene link), when available |
+| target_gene_id | STRING | No | Linked target gene Ensembl id, when available |
+| version | STRING | No | Dataset version/build stamp |
+
+### variant_effect
+
+In-silico *predicted* effects of variants on chromatin accessibility from deep-learning models (ChromBPNet, FLARE) — model predictions, not measured associations, and distinct from the measured reporter activity in [mpra](#mpra). One row per variant per model per context (LONG layout). The `model` column keeps the table model-generic. `variant` is a stored column rather than view-derived because the canonical TSV shared with the API already carries it, which keeps the positional CSV load aligned. Both current datasets map to `resource = 'marderstein'`, so filter on `resource`, not `dataset`.
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| pos | INT64 | Yes | Variant position (1-based) |
+| ref | STRING | Yes | Reference allele |
+| alt | STRING | Yes | Alternate allele |
+| variant | STRING | No | Variant identifier (chr:pos:ref:alt) |
+| rsid | STRING | No | dbSNP rsID, when available |
+| dataset | STRING | Yes | Source dataset (marderstein_chrombpnet, marderstein_flare) |
+| model | STRING | No | Prediction model: chrombpnet, flare |
+| cell_type | STRING | No | Free-text source cell-type label (provenance only, not a join key) |
+| tissue | STRING | No | Harmonized tissue axis (e.g. brain, heart, immune) |
+| life_stage | STRING | No | Harmonized life stage (e.g. fetal, adult) |
+| score | FLOAT64 | No | Predicted effect score; interpretation depends on score_type/model |
+| score_type | STRING | No | Categorical score type (e.g. chrombpnet_logfc, flare_score) |
+| mlog10p | FLOAT64 | No | -log10(p-value) for the predicted effect, when available |
+| predicted_direction | STRING | No | Predicted direction of effect (e.g. gain, loss), when available |
+| quantile_rank | FLOAT64 | No | Quantile rank of the score within the model's distribution |
+| is_significant | BOOL | No | Whether the predicted effect passes the model's significance threshold |
+| version | STRING | No | Dataset version/build stamp |
+
+### mpra
+
+*Measured* cis-regulatory allelic activity from a massively parallel reporter assay (Siraj et al. 2026). One row per variant per `cell_line` (LONG layout), where `cell_line` is either `meta` (cross-cell-line meta-analysis) or one of the five tested lines (K562, HEPG2, SKNSH, HCT116, A549). Reports whether an allele modulates reporter expression (`emVar` / `log2Skew`) and whether the element drives expression above background (`active` / `log2FC`). Distinct from both the in-silico [variant_effect](#variant_effect) predictions and endogenous eQTL/caQTL. Several columns are populated only for one row flavour, so the `cell_line` filter matters: `log2Skew_se` only on `meta` rows, `mean_RNA_ref`/`mean_RNA_alt` only on per-cell-line rows. The p-value columns are also not comparable across flavours (raw for `meta`, adjusted per cell line). `dataset` is constant and injected at load time; `variant` is stored for the same reason as in `variant_effect`.
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| pos | INT64 | Yes | Variant position (1-based) |
+| variant | STRING | No | Variant identifier (chr:pos:ref:alt) |
+| ref | STRING | Yes | Reference allele |
+| alt | STRING | Yes | Alternate (tested) allele |
+| cohort | STRING | No | Fine-mapping cohort the variant was drawn from (GTEx, UKBB, BBJ, control); NULL if no meta-analysis row |
+| cell_line | STRING | No | MPRA context: `meta` or one of K562, HEPG2, SKNSH, HCT116, A549 |
+| emVar | BOOL | No | Whether the allele modulates reporter expression in this context (allelic skew significant) |
+| active | BOOL | No | Whether the element drives reporter expression above background in this context |
+| log2Skew | FLOAT64 | No | Signed allelic effect, log2(alt/ref) of reporter activity |
+| log2Skew_se | FLOAT64 | No | Standard error of log2Skew; only on `cell_line='meta'` rows |
+| log2Skew_mlog10p | FLOAT64 | No | -log10 p for allelic skew (raw for meta rows, adjusted for per-cell-line rows) |
+| log2FC | FLOAT64 | No | Element activity vs background, log2 fold change |
+| log2FC_mlog10p | FLOAT64 | No | -log10 p for element activity (raw for meta rows, Bonferroni-adjusted for per-cell-line rows) |
+| mean_RNA_ref | FLOAT64 | No | Mean reporter RNA level for the ref allele; only on per-cell-line rows |
+| mean_RNA_alt | FLOAT64 | No | Mean reporter RNA level for the alt allele; only on per-cell-line rows |
+| dataset | STRING | Yes | Source dataset (constant `siraj_mpra`) |
 
 ### peak_to_gene
 
@@ -282,8 +397,8 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 
 ### BigQuery Configuration
 
-- **Partitioning**: All tables partitioned by chromosome using `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`
-- **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe)
+- **Partitioning**: Result tables partitioned by chromosome using `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`. The two small reference/link tables (`gene_annotations`, `peak_to_gene`) are unpartitioned — a full scan of them is cheap and their access is gene-keyed rather than positional.
+- **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables)
 
 ### API Service
 
@@ -294,10 +409,14 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/schema` | GET | Get table schemas with column descriptions and allowed values for categorical columns |
+| `/schema` | GET | Get table schemas with column descriptions and allowed values for categorical columns; optional `table` query param limits the response to one view |
 | `/stats` | GET | Get database statistics and row counts |
-| `/tables/{name}/sample` | GET | Get sample rows from a table |
+| `/tables/{name}/sample` | GET | Get sample rows from a table (`limit`, default 10, capped at 100) |
 | `/query` | POST | Execute SQL query |
+| `/docs`, `/redoc`, `/openapi.json` | GET | Interactive API docs and OpenAPI schema, re-declared as ordinary authenticated routes |
+
+`/schema` and `/tables/{name}/sample` accept either a view name (`credible_sets_v`) or the base
+table name it wraps (`credible_sets`), and 404 on anything else.
 
 ### Query Endpoint Parameters
 
@@ -413,13 +532,14 @@ Configuration via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| PROJECT_ID | (from gcloud) | GCP project ID |
+| PROJECT_ID | (from gcloud in the scripts; a placeholder in the API) | GCP project ID — the API's fallback is not a real project, so it must be set in a deployment |
 | DATASET_ID | genetics_results | BigQuery dataset name |
 | LOCATION | europe-west1 | BigQuery dataset location |
 | MAX_ROWS | 100000 | Maximum rows returned per query |
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
 | PORT | 8080 | API server port |
 | DATASETS_CONFIG_PATH | ./configs/datasets.yaml | Path to shared datasets YAML config |
+| GCS_BUCKET / GCS_PREFIX | varies by loader (placeholder `bucket-name` with an empty prefix in most, `finngen-commons` + `results_api_data/` in the newer ones) | GCS source location for `scripts/load_*.sh` |
 | CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
 | INTERNAL_API_SECRET | (unset) | Shared secret required as `Authorization: Bearer` on every endpoint except `/health`. Unset disables authentication entirely (logs a warning at startup) |
 
@@ -442,6 +562,8 @@ genetics-results-db/
 │   ├── exome_variant_results_v.sql    # View with variant and resource columns
 │   ├── gene_burden_results.sql        # GeneBASS gene burden results table
 │   ├── gene_burden_results_v.sql      # View with resource column
+│   ├── asm_qtl.sql                    # deCODE allele-specific methylation QTL table
+│   ├── asm_qtl_v.sql                  # View with variant, maf and resource columns
 │   ├── gene_annotations.sql           # Whole-universe gene annotations table (HGNC + GENCODE)
 │   ├── gene_annotations_v.sql         # View with resource column
 │   ├── open_chromatin.sql             # Open-chromatin atlas table (accessible regions by cell type/tissue/condition)
@@ -450,6 +572,8 @@ genetics-results-db/
 │   ├── peak_to_gene_v.sql             # View with resource column
 │   ├── variant_effect.sql             # Predicted variant-effect table (ChromBPNet/FLARE scores; stored variant column)
 │   ├── variant_effect_v.sql           # View with resource column
+│   ├── mpra.sql                       # Measured MPRA allelic activity table (Siraj et al.; stored variant column)
+│   ├── mpra_v.sql                     # View with resource column
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
 │   └── variant_annotation_v.sql       # View with constant resource='finngen'
 ├── scripts/
@@ -465,6 +589,7 @@ genetics-results-db/
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)
 │   ├── load_variant_effect.sh # Load predicted variant effects (marderstein chrombpnet+flare; chr-string→INT64 conversion, truncate+append)
+│   ├── load_mpra.sh           # Load Siraj MPRA results (single LONG file; chr-string→INT64, dataset injected via --const-column)
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
@@ -474,10 +599,14 @@ genetics-results-db/
 ├── api/
 │   ├── main.py                # FastAPI application
 │   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py
+├── tests/
+│   ├── test_api_auth.py       # Shared-secret authentication tests (never reach BigQuery)
+│   └── test_build_gene_annotations.py  # gene_annotations build unit tests
 ├── docs/
 │   └── project-spec.md        # This document
 ├── pyproject.toml             # Python project metadata and dependencies
 ├── Dockerfile                 # Container image (built & deployed by genetics-results-suite via k8s)
+├── .dockerignore              # Keeps local secrets and caches out of the build context
 ├── README.md                  # Usage documentation
 └── .gitignore
 ```
@@ -547,6 +676,32 @@ genetics-results-db/
    ./scripts/load_variant_annotation.sh
    ```
    Defaults to `gs://finngen-commons/results_api_data/variant_annotations/R14_annotated_variants_v0.small.gz`. Override `GCS_BUCKET`, `GCS_PREFIX`, or `VA_FILE` for other bucket layouts (e.g. `GCS_BUCKET=daly-genetics-results GCS_PREFIX=""`).
+
+9. **Load ASM-QTL results** (deCODE CpG + MDS; first file truncates, the second appends):
+   ```bash
+   ./scripts/load_asm_qtl.sh
+   ```
+   Reads `gs://<bucket>/<prefix>asm_qtl/deCODE_asmQTL_{CpG,MDS}.munged.tsv.gz` and injects the `dataset` value per file, since the munged TSVs carry no `dataset` column.
+
+10. **Load the open-chromatin atlas** (6 datasets; first truncates, the rest append):
+    ```bash
+    ./scripts/load_open_chromatin.sh
+    ```
+    Reads `gs://<bucket>/<prefix>open_chromatin/<resource>/<dataset-id>.tsv.gz`. The canonical TSVs already carry `dataset`, and the chrom string is converted to INT64 on load.
+
+11. **Load predicted variant effects** (marderstein chrombpnet + flare):
+    ```bash
+    ./scripts/load_variant_effect.sh
+    ```
+    Reads `gs://<bucket>/<prefix>variant_effect/<resource>/<dataset-id>.tsv.gz`, same layout and conventions as the open-chromatin load.
+
+12. **Load MPRA results** (single LONG file, `WRITE_TRUNCATE`):
+    ```bash
+    ./scripts/load_mpra.sh
+    ```
+    Reads `gs://<bucket>/<prefix>mpra/siraj_mpra/siraj_mpra.tsv.gz` and injects `dataset=siraj_mpra`, since — unlike the open-chromatin and variant-effect files — the MPRA LONG file has no `dataset` column.
+
+These four loaders default `GCS_BUCKET` to the placeholder `bucket-name`, so set `GCS_BUCKET` (and `GCS_PREFIX`, e.g. `results_api_data/` for finngen-commons, empty for the daly layout) explicitly.
 
 ### API deployment
 
