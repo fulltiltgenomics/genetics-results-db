@@ -25,7 +25,9 @@ ts() {
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-finngen-commons}"
-GCS_PREFIX="${GCS_PREFIX:-results_api_data/}"
+# no colon: only an UNSET prefix takes the default, so GCS_PREFIX="" (the daly
+# bucket layout, where the data sits at the bucket root) is honored
+GCS_PREFIX="${GCS_PREFIX-results_api_data/}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
