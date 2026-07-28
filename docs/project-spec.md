@@ -66,7 +66,7 @@ Fine-mapped credible set variants from multiple genetics datasets.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| dataset | STRING | Yes | Source dataset (FinnGen_R13, Open_Targets_25.12, etc.) |
+| dataset | STRING | Yes | Source dataset (FinnGen_R14, Open_Targets_26.06, etc.) |
 | data_type | STRING | Yes | GWAS, eQTL, pQTL, sQTL, caQTL |
 | trait | STRING | Yes | Phenotype/trait name. For `caQTL` rows this is a chromatin peak id (`chr-start-end`), never a gene — reach genes via [peak_to_gene](#peak_to_gene) |
 | trait_original | STRING | Yes | Original trait name |
