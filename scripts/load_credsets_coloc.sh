@@ -117,15 +117,14 @@ echo ""
 ts "=== Deleting existing credible_sets rows owned by this script ==="
 # Surgical DELETE keeps rows loaded by other scripts (e.g. load_pseudo.sh's
 # pseudo CS datasets). When adding a dataset to CREDSET_FILES above, add the
-# matching dataset value here too. Superseded versions of a dataset stay listed
-# until they are known to be gone from the table, otherwise their rows survive
-# the reload and sit alongside the new release's.
+# matching dataset value here too. When bumping a dataset to a new release,
+# list the superseded value here as well until its rows are gone from the
+# table, otherwise they survive the reload and sit alongside the new ones.
 bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
   "DELETE FROM \`${PROJECT_ID}.${DATASET_ID}.credible_sets\`
    WHERE dataset IN ('FinnGen_R14', 'FinnGen_kanta', 'FinnGen_drugs',
                      'FinnGen_Olink', 'FinnGen_Olink_5K', 'UKB_PPP',
-                     'FinnGen_snRNAseq', 'FinnGen_ATACseq',
-                     'Open_Targets_26.06', 'Open_Targets_25.12')
+                     'FinnGen_snRNAseq', 'FinnGen_ATACseq', 'Open_Targets_26.06')
       OR dataset LIKE 'QTD%'"
 ts "Done"
 
