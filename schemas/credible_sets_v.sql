@@ -12,6 +12,7 @@ SELECT
     WHEN LOWER(dataset) LIKE 'open_targets%' THEN 'open_targets'
     WHEN LOWER(dataset) LIKE 'covid19_hgi%' THEN 'covid_hgi'
     WHEN LOWER(dataset) = 'pgc' THEN 'pgc'
+    WHEN LOWER(dataset) LIKE 'pgc_scz%' THEN 'pgc'
     WHEN LOWER(dataset) = 'gp2' THEN 'gp2'
     WHEN LOWER(dataset) = 'iibdgc' THEN 'ibd_gwas'
     ELSE LOWER(dataset)
