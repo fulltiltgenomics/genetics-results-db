@@ -641,6 +641,8 @@ genetics-results-db/
    ```
    Loads run in parallel: each table's wipe (the `credible_sets` surgical `DELETE`, and the first `WRITE_TRUNCATE` load of each coloc table) is awaited before that table's files are appended concurrently. `credible_sets` loads first, then `colocalization` and `coloc_credsets` load concurrently.
 
+   This script owns the genuinely fine-mapped credible sets, including `PGC_SCZ_2022` (the published PGC schizophrenia FINEMAP sets, Trubetskoy et al. 2022) — pseudo credible sets belong to `load_pseudo.sh` instead. `PGC_SCZ_2022` rows sit next to the `PGC` pseudo rows under resource `pgc` and cover the same trait code `SCZ`, so filtering on `resource` alone mixes fine-mapped and pseudo results.
+
 3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
    ```bash
    ./scripts/load_pseudo.sh
