@@ -180,7 +180,9 @@ Variant-level association results from exome sequencing studies (GeneBASS, IBD e
 
 ### gene_burden_results
 
-Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA2). All filtered to mlog10p_burden > 4. Data files are in `exome_results/` on GCS.
+Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA2). **Unfiltered** — every gene x annotation x trait combination is here, so a query can ask for one gene in one trait regardless of significance. GeneBASS alone is ~343M rows, loaded from the ~4.5k per-trait files in `exome_results/genebass/gene_burden_per_trait/`; the other datasets come from their full `.munged.tsv.gz`. Clustering on `dataset, gene, trait` keeps single-gene lookups cheap despite the size.
+
+The tabix API is filtered differently: `/gene_based/{gene}` reads a combined mlog10p_burden > 4 file for GeneBASS (returning every trait of one gene unfiltered would be ~18k rows), while `/gene_based_results_by_phenotype/{resource}/{trait}` serves the same unfiltered per-trait files this table is loaded from. Data files are in `exome_results/` on GCS.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
@@ -582,9 +584,9 @@ genetics-results-db/
 │   ├── load_credsets_coloc.sh  # Load credible sets and colocalization data
 │   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses, external EXT file: COVID-19 HGI + PGC + GP2)
 │   ├── load_genebass_variants.sh    # Load GeneBASS exome variant results (truncates table)
-│   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results (truncates table)
+│   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results, unfiltered per-trait files (truncates table)
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
-│   ├── load_gene_burden_extra.sh    # Append additional gene burden results (BipEx, IBD, SCHEMA2)
+│   ├── load_gene_burden_extra.sh    # Append additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)
@@ -654,6 +656,10 @@ genetics-results-db/
    ./scripts/load_genebass_variants.sh
    ./scripts/load_genebass_gene.sh
    ```
+   The gene burden load reads the ~4.5k unfiltered per-trait files under
+   `exome_results/genebass/gene_burden_per_trait/` via a `*.tsv.gz` wildcard, so it moves
+   ~343M rows and takes considerably longer than the variant load. The variant load stays
+   on the mlog10p > 4 file.
 
 5. **Append additional exome and gene burden results** (IBD, SCHEMA2, BipEx) on top of the GeneBASS load:
    ```bash

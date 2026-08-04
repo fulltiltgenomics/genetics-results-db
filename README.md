@@ -16,11 +16,11 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/load_genebass_variants.sh](scripts/load_genebass_variants.sh) loads GeneBASS exome variant results (truncates `exome_variant_results`)
 
-[scripts/load_genebass_gene.sh](scripts/load_genebass_gene.sh) loads GeneBASS gene burden results (truncates `gene_burden_results`)
+[scripts/load_genebass_gene.sh](scripts/load_genebass_gene.sh) loads GeneBASS gene burden results, unfiltered, from the ~4.5k per-trait files (truncates `gene_burden_results`)
 
 [scripts/load_exome_variants_extra.sh](scripts/load_exome_variants_extra.sh) appends additional exome variant results (IBD)
 
-[scripts/load_gene_burden_extra.sh](scripts/load_gene_burden_extra.sh) appends additional gene burden results (BipEx, IBD, SCHEMA2)
+[scripts/load_gene_burden_extra.sh](scripts/load_gene_burden_extra.sh) appends additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
 
 [scripts/load_asm_qtl.sh](scripts/load_asm_qtl.sh) loads ASM-QTL (allele-specific methylation) results
 
@@ -113,7 +113,7 @@ Queries go through a view (`<table>_v`) per table, which adds derived columns su
 - **colocalization** — colocalization analysis results between datasets
 - **coloc_credsets** — variants in colocalized credible sets
 - **exome_variant_results** — exome variant associations (Genebass, IBD exome)
-- **gene_burden_results** — gene burden test results (Genebass, BipEx2, IBD exome, SCHEMA2)
+- **gene_burden_results** — gene burden test results, unfiltered (Genebass, BipEx2, IBD exome, SCHEMA2)
 - **asm_qtl** — allele-specific methylation QTL results (deCODE)
 - **gene_annotations** — whole-universe gene reference table (HGNC + GENCODE, gene-group lineage)
 - **open_chromatin** — atlas of accessible/active chromatin regions by cell type/tissue/condition

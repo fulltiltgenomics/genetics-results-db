@@ -1,6 +1,10 @@
 #!/bin/bash
 # Append additional gene burden test results (BipEx, IBD, SCHEMA2) to gene_burden_results.
-# Run after load_exome_data.sh, which loads Genebass and truncates the table.
+# Run after load_genebass_gene.sh, which loads Genebass and truncates the table.
+#
+# These are the full unfiltered munged files, matching the unfiltered genebass
+# load: BigQuery holds every gene x annotation x trait so a caller can ask for a
+# specific gene in a specific trait regardless of significance.
 
 set -euo pipefail
 
@@ -18,11 +22,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ts "Appending gene burden results into ${PROJECT_ID}.${DATASET_ID}.gene_burden_results"
 
 GENE_BURDEN_FILES=(
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/bipex/BipEx2_gene_results.munged.mlog10p_gt4.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_CD_gene_results.munged.mlog10p_gt4.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_IBD_gene_results.munged.mlog10p_gt4.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_UC_gene_results.munged.mlog10p_gt4.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/schema/SCHEMA2_gene_results.munged.mlog10p_gt4.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/bipex/BipEx2_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_CD_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_IBD_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_UC_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/schema/SCHEMA2_gene_results.munged.tsv.gz"
 )
 
 echo ""

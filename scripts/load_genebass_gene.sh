@@ -1,6 +1,12 @@
 #!/bin/bash
 # Load GeneBASS gene burden results into gene_burden_results (WRITE_TRUNCATE).
 # Truncates the table — run before load_gene_burden_extra.sh.
+#
+# Loads the unfiltered per-trait files (~4.5k objects, ~343M rows), not the
+# mlog10p_burden > 4 subset the API's /gene_based/{gene} reads: BigQuery is where
+# a caller asks for one gene's result in a specific trait regardless of
+# significance. The table is clustered on dataset/gene/trait, so those lookups
+# still scan a small fraction of it.
 
 set -euo pipefail
 
@@ -18,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ts "Loading GeneBASS gene burden results into ${PROJECT_ID}.${DATASET_ID}.gene_burden_results"
 
 GENEBASS_GENE_FILES=(
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/genebass/gene_burden_results.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/genebass/gene_burden_per_trait/*.tsv.gz"
 )
 
 echo ""
@@ -30,8 +36,9 @@ ts "Truncating gene_burden_results (preserves schema/descriptions)..."
 bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
   "TRUNCATE TABLE \`${PROJECT_ID}.${DATASET_ID}.gene_burden_results\`"
 for gcs_uri in "${GENEBASS_GENE_FILES[@]}"; do
-  if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
-    ts "ERROR: ${gcs_uri} not found"
+  # gsutil stat takes no wildcard, so match the way BigQuery will
+  if ! gcloud storage ls "${gcs_uri}" >/dev/null 2>&1; then
+    ts "ERROR: ${gcs_uri} matches no objects"
     exit 1
   fi
   ts "Loading ${gcs_uri}..."
