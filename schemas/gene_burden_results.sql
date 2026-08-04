@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS `genetics_results.gene_burden_results`
   annotation STRING NOT NULL OPTIONS(description="Annotation category (pLoF, nonsynonymous, etc.)"),
   mlog10p_burden FLOAT64 NOT NULL OPTIONS(description="-log10(p-value) for burden test"),
   beta FLOAT64 NOT NULL OPTIONS(description="Effect size"),
-  se FLOAT64 NOT NULL OPTIONS(description="Standard error"),
+  se FLOAT64 OPTIONS(description="Standard error. NULL where the burden test returned no estimate (beta 0, p 1)"),
   total_variants INT64 OPTIONS(description="Total variants in gene"),
   total_variants_pheno INT64 OPTIONS(description="Total variants in phenotype"),
   n_cases INT64 NOT NULL OPTIONS(description="Number of cases"),

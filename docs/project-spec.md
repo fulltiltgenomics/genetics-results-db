@@ -196,7 +196,7 @@ The tabix API is filtered differently: `/gene_based/{gene}` reads a combined mlo
 | annotation | STRING | Yes | Annotation category (pLoF, nonsynonymous, etc.) |
 | mlog10p_burden | FLOAT64 | Yes | -log10(p-value) for burden test |
 | beta | FLOAT64 | Yes | Effect size |
-| se | FLOAT64 | Yes | Standard error |
+| se | FLOAT64 | No | Standard error. NULL where the burden test returned no estimate (beta 0, p 1) |
 | total_variants | INT64 | No | Number of variants in gene |
 | total_variants_pheno | INT64 | No | Number of variants in gene for this trait |
 | n_cases | INT64 | Yes | Number of cases, or number of samples for quantitative traits |

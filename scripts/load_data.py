@@ -155,7 +155,9 @@ SCHEMAS = {
         bigquery.SchemaField("annotation", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("mlog10p_burden", "FLOAT64", mode="REQUIRED"),
         bigquery.SchemaField("beta", "FLOAT64", mode="REQUIRED"),
-        bigquery.SchemaField("se", "FLOAT64", mode="REQUIRED"),
+        # NULL where the burden test returned no estimate (beta 0, p 1) — only
+        # visible now that the unfiltered results are loaded
+        bigquery.SchemaField("se", "FLOAT64"),
         bigquery.SchemaField("total_variants", "INT64"),
         bigquery.SchemaField("total_variants_pheno", "INT64"),
         bigquery.SchemaField("n_cases", "INT64", mode="REQUIRED"),
