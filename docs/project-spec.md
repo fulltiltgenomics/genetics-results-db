@@ -597,7 +597,8 @@ genetics-results-db/
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
-│   └── datasets.yaml          # Shared dataset/resource config (synced from suite repo)
+│   └── datasets.yaml          # Shared dataset/resource config — generated, gitignored;
+│                              #   run ../genetics-results-suite/scripts/sync-datasets.sh
 ├── api/
 │   ├── main.py                # FastAPI application
 │   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py
@@ -619,6 +620,11 @@ genetics-results-db/
 
 - Google Cloud SDK (`gcloud`) configured
 - BigQuery API enabled
+- **`configs/datasets.yaml` must exist.** It is generated, not committed — the canonical
+  file lives in `genetics-results-suite`. Create the local copy with
+  `../genetics-results-suite/scripts/sync-datasets.sh`, or set `DATASETS_CONFIG_PATH`.
+  `api/main.py` raises at import without it, so the API and the test suite both fail to
+  start on a fresh clone.
 - **The project virtualenv must be activated** before running any `scripts/load_*.sh`.
   The loaders invoke bare `python3`, which resolves to the system interpreter — that
   one has no `google-cloud-bigquery` and the load dies with

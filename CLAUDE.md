@@ -61,7 +61,8 @@ Adding or changing a BigQuery view or table here also requires updating
 
 1. `configs/datasets.yaml` in THIS repo is a generated COPY, not the source of truth. The canonical file lives in `../genetics-results-suite/configs/datasets.yaml`, and that is the copy deployed (mounted as a k8s ConfigMap into both service pods).
 2. NEVER edit `configs/datasets.yaml` here directly — changes won't deploy and will be overwritten on the next sync. Edit the canonical file in `genetics-results-suite`, then run `../genetics-results-suite/scripts/sync-datasets.sh` to copy it down into this repo (and `genetics-results-api`).
-3. After editing dataset/resource/table metadata, verify all copies are in sync (e.g. `diff` against the canonical file) and commit the synced copy in each affected repo.
+3. The local copy is **gitignored, not committed** — `genetics-results-suite` is the only repo where `datasets.yaml` is version-controlled. A fresh clone has no copy, and both the server and the test suite fail to start until `sync-datasets.sh` has been run.
+4. After editing dataset/resource/table metadata, verify the local copy is in sync (e.g. `diff` against the canonical file) and commit the change in `genetics-results-suite` only.
 
 
 # Software Development Behavior Guidelines
