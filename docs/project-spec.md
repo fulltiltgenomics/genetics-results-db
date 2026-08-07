@@ -50,8 +50,10 @@ BigQuery Dataset
   │   └── mpra_v (view: adds resource column)
   ├── variant_annotation (partitioned by chr, clustered by most_severe, gene_most_severe)
   │   └── variant_annotation_v (view: adds constant resource='finngen')
-  └── peak_to_gene (unpartitioned link table, clustered by symbol, cell_type, peak_id)
-      └── peak_to_gene_v (view: adds resource column)
+  ├── peak_to_gene (unpartitioned link table, clustered by symbol, cell_type, peak_id)
+  │   └── peak_to_gene_v (view: adds resource column)
+  └── hla_associations (unpartitioned, clustered by phenotype, gene, allele)
+      └── hla_associations_v (view: adds resource column, mapped to 'finngen')
       ↓
 API (FastAPI) — exposes only views, not underlying tables
       ↓
@@ -336,6 +338,37 @@ In-silico *predicted* effects of variants on chromatin accessibility from deep-l
 | mean_RNA_alt | FLOAT64 | No | Mean reporter RNA level for the alt allele; only on per-cell-line rows |
 | dataset | STRING | Yes | Source dataset (constant `siraj_mpra`) |
 
+### hla_associations
+
+Classical HLA allele associations from FinnGen R14: every imputed HLA allele tested against every core R14 endpoint. One row per (phenotype, allele) — 2,712 phenotypes x 187 alleles across 10 genes, ~507k rows.
+
+**The unit is an allele, not a variant.** There are deliberately no `ref`/`alt` columns: the source models the test as `ref='<absent>'` / `alt='<allele name>'`, and the munge rewrites that into explicit `gene`/`allele`. These rows therefore cannot be joined to `credible_sets`/`variant_annotation` on chr/pos/ref/alt, and `pos` is the HLA *gene's* single anchor position shared by all of its alleles rather than the allele's own location (HLA-DRB3/DRB4/DRB5 share the placeholder 32500000). `pos` is kept because it is what the tabix index the API reads is built on.
+
+**Why the table exists.** results-api serves the same data from per-phenotype tabix files, which answers "all alleles for a trait". The reverse — "all traits for an allele", the PheWAS view that makes MHC pleiotropy visible — spans all 2,712 files and is only answerable here. Clustering is `phenotype, gene, allele` to serve both directions.
+
+Two columns need care when querying. `pval` **underflows to 0** for the strongest signals (coeliac `DQB1*02:01` is mlogp 1596), so rank and threshold on `mlogp`. `info` is the allele's imputation quality (constant per allele across phenotypes) and filtering on it is not optional in practice: rare alleles imputed below ~0.5 produce enormous unstable betas that read as spectacular associations but are artifacts.
+
+The table is unpartitioned — every row is chr 6, so a `RANGE_BUCKET(chr, …)` partition would put the whole table in one partition anyway. `dataset` is constant and injected at load time.
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| chr | INT64 | Yes | Chromosome (always 6, the MHC) |
+| pos | INT64 | Yes | Anchor position of the allele's HLA gene, shared by all its alleles; does not locate the allele |
+| gene | STRING | Yes | HLA gene symbol (HLA-A, -B, -C, -DPB1, -DQA1, -DQB1, -DRB1, -DRB3, -DRB4, -DRB5) |
+| allele | STRING | Yes | Imputed classical allele at 4-digit (two-field) resolution, e.g. `B*27:05`; not gene-prefixed |
+| phenotype | STRING | Yes | FinnGen R14 endpoint code |
+| pval | FLOAT64 | No | Association p-value; underflows to 0 for the strongest signals — rank on `mlogp` |
+| mlogp | FLOAT64 | No | -log10 p-value (genome-wide significance 7.3) |
+| beta | FLOAT64 | No | Effect size per copy of the allele (log OR for binary endpoints) |
+| sebeta | FLOAT64 | No | Standard error of beta |
+| af_alt | FLOAT64 | No | Allele frequency in the full cohort |
+| af_alt_cases | FLOAT64 | No | Allele frequency in cases; NULL for quantitative endpoints |
+| af_alt_controls | FLOAT64 | No | Allele frequency in controls; NULL for quantitative endpoints |
+| info | FLOAT64 | No | Imputation INFO for the allele; below ~0.5 the effect estimates are artifacts |
+| dataset | STRING | Yes | Source dataset (constant `finngen_hla`) |
+
+The `hla_associations_v` view maps `dataset` to `resource = 'finngen'` explicitly rather than via the lowercase fallback the other product views use, since that would yield `finngen_hla` — these results belong to the same resource as the FinnGen GWAS they were run alongside.
+
 ### peak_to_gene
 
 Open4Gene peak-to-gene links from the FinnGen ATAC-seq study: which genes a chromatin peak's accessibility is associated with, in which cell type. One row per (peak, gene, cell type), ~1.07M rows over 112,032 peaks and 12,445 genes across 33 cell types. Only significant links are published, so a missing row means no significant link was found, not evidence against one.
@@ -576,6 +609,8 @@ genetics-results-db/
 │   ├── variant_effect_v.sql           # View with resource column
 │   ├── mpra.sql                       # Measured MPRA allelic activity table (Siraj et al.; stored variant column)
 │   ├── mpra_v.sql                     # View with resource column
+│   ├── hla_associations.sql           # Classical HLA allele associations (FinnGen R14; allele-keyed, no ref/alt)
+│   ├── hla_associations_v.sql         # View with resource column (mapped to 'finngen')
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
 │   └── variant_annotation_v.sql       # View with constant resource='finngen'
 ├── scripts/
@@ -592,6 +627,7 @@ genetics-results-db/
 │   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)
 │   ├── load_variant_effect.sh # Load predicted variant effects (marderstein chrombpnet+flare; chr-string→INT64 conversion, truncate+append)
 │   ├── load_mpra.sh           # Load Siraj MPRA results (single LONG file; chr-string→INT64, dataset injected via --const-column)
+│   ├── load_hla.sh            # Load FinnGen HLA allele associations (single combined file; chr-string→INT64, dataset injected via --const-column)
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources

@@ -266,6 +266,28 @@ SCHEMAS = {
         bigquery.SchemaField("mean_RNA_alt", "FLOAT64"),
         bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
     ],
+    # column order must match TSV file exactly (canonical HLA combined layout:
+    # chrom, pos, gene, allele, phenotype, pval, mlogp, beta, sebeta, af_alt,
+    # af_alt_cases, af_alt_controls, info). The source chrom is a numeric string
+    # (always "6"); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES
+    # staging. `dataset` is not in the file — it is injected at load with
+    # --const-column dataset=finngen_hla.
+    "hla_associations": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("allele", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("phenotype", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("pval", "FLOAT64"),
+        bigquery.SchemaField("mlogp", "FLOAT64"),
+        bigquery.SchemaField("beta", "FLOAT64"),
+        bigquery.SchemaField("sebeta", "FLOAT64"),
+        bigquery.SchemaField("af_alt", "FLOAT64"),
+        bigquery.SchemaField("af_alt_cases", "FLOAT64"),
+        bigquery.SchemaField("af_alt_controls", "FLOAT64"),
+        bigquery.SchemaField("info", "FLOAT64"),
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+    ],
     # column order must match TSV file exactly (canonical FinnGen R14 annotation
     # layout from R14_annotated_variants_v0.small.gz, the same file the API serves
     # at /variant_annotation/finngen): variant, chr, pos, ref, alt, INFO, AF,
@@ -331,7 +353,13 @@ JSON_SCHEMAS = {"gene_annotations"}
 # tables are always routed through the staging path: `chr` is loaded as STRING, then
 # converted to INT64 on projection. The conversion still tolerates a legacy "chr"
 # prefix and X/Y/M spellings so mixed inputs load consistently.
-CHR_STRING_TABLES = {"open_chromatin", "variant_effect", "mpra", "peak_to_gene"}
+CHR_STRING_TABLES = {
+    "open_chromatin",
+    "variant_effect",
+    "mpra",
+    "peak_to_gene",
+    "hla_associations",
+}
 
 # tables whose source `cell_type` carries the Open4Gene "predicted.celltype." prefix while
 # every other table (credible_sets in particular) stores the bare form ("l1.B"). The prefix
