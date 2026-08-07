@@ -50,8 +50,12 @@ BigQuery Dataset
   │   └── mpra_v (view: adds resource column)
   ├── variant_annotation (partitioned by chr, clustered by most_severe, gene_most_severe)
   │   └── variant_annotation_v (view: adds constant resource='finngen')
-  └── peak_to_gene (unpartitioned link table, clustered by symbol, cell_type, peak_id)
-      └── peak_to_gene_v (view: adds resource column)
+  ├── peak_to_gene (unpartitioned link table, clustered by symbol, cell_type, peak_id)
+  │   └── peak_to_gene_v (view: adds resource column)
+  ├── phenotypes (unpartitioned metadata table, clustered by dataset, trait_original)
+  │   └── phenotypes_v (view: pass-through — resource is already a registry column)
+  └── datasets (unpartitioned metadata table, clustered by dataset, resource)
+      └── datasets_v (view: pass-through — resource is already a registry column)
       ↓
 API (FastAPI) — exposes only views, not underlying tables
       ↓
@@ -395,11 +399,69 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 | GENOME_enrichment_nfe | FLOAT64 | No | Finnish vs non-Finnish European (NFE) enrichment, gnomAD genomes |
 | index | INT64 | No | Row index in the source annotation file |
 
+### phenotypes
+
+Trait/phenotype metadata: the human-readable name, trait type, category and sample sizes behind the opaque phenotype codes the results tables store. One row per `(dataset, trait_original)`, 32,611 rows. Built from the per-dataset `metadata_file` JSON/TSVs referenced by `datasets.yaml`, which were previously reachable only through genetics-results-api — so resolving a trait code cost a separate round trip.
+
+**Join on `trait_original`, never on `trait`.** In `credible_sets`, `colocalization`, `coloc_credsets`, `exome_variant_results` and `gene_burden_results`, `trait_original` is the phenotype code and `trait` is a display form that differs for most rows: FinnGen R14 stores `trait='Height,_inverse-rank_normalized'` with `trait_original='HEIGHT_IRN'`, Genebass stores `trait='Mean corpuscular volume'` with `trait_original='continuous_30040_both_sexes__irnt'`, and QTL rows store a gene symbol in `trait` with the Ensembl id in `trait_original`. Joining on `trait` returns zero rows silently.
+
+```sql
+SELECT cs.dataset, cs.trait_original, p.trait_name, p.n_cases, cs.pip
+FROM credible_sets_v cs
+LEFT JOIN phenotypes_v p USING (dataset, trait_original)
+WHERE cs.chr = 6 AND cs.pos BETWEEN 32000000 AND 33000000
+```
+
+**Coverage is partial by design.** Only datasets that ship a phenotype metadata file have rows — FinnGen R14/R12/Kanta/drugs, the FinnGen+UKBB and FinnGen+MVP+UKBB meta-analyses, Open Targets, Genebass, COVID-19 HGI and IIBDGC. QTL datasets have none (their traits are genes, proteins and peaks, resolved via `gene_annotations` and `peak_to_gene`), and neither do datasets whose codes are already readable (PGC, GP2, BipEx2, SCHEMA2, IBD_exome). Use a `LEFT JOIN` when the dataset is not known in advance. Ranked fuzzy phenotype *search* stays on results-api; this table serves exact resolution and SQL-expressible filtering.
+
+| Column | Type | Required | Description |
+|---|---|---|---|
+| dataset | STRING | Yes | Results-view dataset name; joins the `dataset` column of every results view |
+| trait_original | STRING | Yes | Phenotype code exactly as the results views store it — the join key |
+| trait_name | STRING | No | Human-readable trait name |
+| trait_type | STRING | No | `binary` or `quantitative`; NULL when the source states neither |
+| category | STRING | No | Source grouping (FinnGen ICD chapter, Kanta class, Open Targets project id, Genebass trait_type) |
+| n_samples | INT64 | No | Total analysed sample size; NULL (not 0) when unreported |
+| n_cases | INT64 | No | Number of cases |
+| n_controls | INT64 | No | Number of controls |
+| dataset_id | STRING | Yes | ONE contributing `datasets.yaml` registry key — provenance, **not** a join key: merged `datasets` rows keep only their first contributor, so `finngen_kanta_r12` and `genebass_gene_based` match no `datasets` row. Join on `dataset`, or on `dataset_id IN UNNEST(datasets.dataset_ids)` |
+| resource | STRING | Yes | Resource the dataset belongs to |
+| author | STRING | No | Study author; per-study for Open Targets |
+| publication_date | DATE | No | NULL rather than invented when the source gives only a year |
+| version | STRING | No | Dataset version label |
+| coloc_partner_only | BOOL | Yes | TRUE for traits whose dataset exists only as a colocalization partner (FinnGen R12 core and R12 Kanta) |
+
+### datasets
+
+Dataset registry: what every `dataset` value appearing in the results views actually is. 888 rows, of which 841 are eQTL Catalogue QTD sub-studies. Unique on `dataset`, so `JOIN datasets_v USING (dataset)` never fans results out — where several registry entries share one results-view dataset (`pgc_scz` + `pgc_bip` inside `PGC`, the two Genebass products inside `genebass`, the two IBD exome products inside `IBD_exome`) they are merged into one row and `dataset_ids` lists every contributor.
+
+`dataset` is NULL for the seven registry entries with no BigQuery presence — summary-statistics-only products, expression, chromatin peaks and gene-disease sets that only results-api serves. They are kept so the table answers "what data exists at all"; filter `dataset IS NOT NULL` for queryable datasets only.
+
+| Column | Type | Required | Description |
+|---|---|---|---|
+| dataset | STRING | No | Results-view dataset name; NULL when the dataset has no BigQuery presence |
+| dataset_id | STRING | Yes | Primary `datasets.yaml` registry key |
+| dataset_ids | ARRAY&lt;STRING&gt; | No | Every registry key merged into this row |
+| resource | STRING | Yes | Resource name; matches the derived `resource` column of the results views |
+| resource_label | STRING | No | Display label for the resource |
+| resource_aliases | ARRAY&lt;STRING&gt; | No | Alternative names users write for the resource |
+| version | STRING | No | Dataset version label |
+| description | STRING | No | What the dataset is, its cohort and caveats; merged entries joined with ` \| ` |
+| author | STRING | No | Producing consortium; for QTD sub-studies the source study label |
+| publication_date | DATE | No | Release/publication date |
+| data_type | STRING | No | Lower-case registry vocabulary (`gwas`, `eQTL`, `pqtl`, …), NOT the upper-case `data_type` of the results views |
+| trait_type | STRING | No | Dataset-level `binary`/`quantitative`/`mixed` |
+| n_samples | INT64 | No | Dataset-level sample size where the registry states one |
+| pseudo_credible_sets | BOOL | Yes | TRUE when this dataset's credible sets are LD-clumped proxies, not SuSiE fine-mapping — check before interpreting `pip`/`cs_size` |
+| coloc_partner_only | BOOL | Yes | TRUE when the dataset ships no independently queryable product |
+| collection | BOOL | Yes | TRUE for a collection whose sub-studies carry `subdataset_of` = its `dataset_id` |
+| subdataset_of | STRING | No | Parent collection's `dataset_id` for sub-studies (QTD ids under `eqtl_catalogue`) |
+
 ## Technical Implementation
 
 ### BigQuery Configuration
 
-- **Partitioning**: Result tables partitioned by chromosome using `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`. The two small reference/link tables (`gene_annotations`, `peak_to_gene`) are unpartitioned — a full scan of them is cheap and their access is gene-keyed rather than positional.
+- **Partitioning**: Result tables partitioned by chromosome using `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`. The small reference/link/metadata tables (`gene_annotations`, `peak_to_gene`, `phenotypes`, `datasets`) are unpartitioned — a full scan of them is cheap and their access is gene-keyed rather than positional.
 - **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables)
 
 ### API Service
@@ -512,7 +574,7 @@ Notes:
 #### Other controls
 
 - `maximum_bytes_billed` on every BigQuery job, including the internal ones behind `/schema`, `/stats` and `/tables/{name}/sample` (previously uncapped, so a large table could run up an unbounded scan)
-- Table names auto-qualified, and bare view names resolved via `_BASE_TABLES`
+- Table names auto-qualified, and bare view names resolved via `_BASE_TABLES`. `_qualify_tables()` rewrites only names in a genuine table position (`FROM`/`JOIN` + whitespace + name); a plain substring replace also hit string literals and column aliases — `LIKE '%uk biobank datasets%'` was rewritten into valid SQL that silently matched nothing
 - IAM-level read-only enforcement on the API service account (see IAM Roles below)
 
 ### IAM Roles
@@ -577,7 +639,11 @@ genetics-results-db/
 │   ├── mpra.sql                       # Measured MPRA allelic activity table (Siraj et al.; stored variant column)
 │   ├── mpra_v.sql                     # View with resource column
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
-│   └── variant_annotation_v.sql       # View with constant resource='finngen'
+│   ├── variant_annotation_v.sql       # View with constant resource='finngen'
+│   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
+│   ├── phenotypes_v.sql               # Pass-through view (resource is a registry column)
+│   ├── datasets.sql                   # Dataset registry keyed by results-view `dataset`
+│   └── datasets_v.sql                 # Pass-through view (resource is a registry column)
 ├── scripts/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
@@ -595,6 +661,8 @@ genetics-results-db/
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
+│   ├── load_phenotypes.sh         # Build + load phenotypes and datasets metadata tables (WRITE_TRUNCATE)
+│   ├── build_phenotypes.py        # Build phenotypes/datasets NDJSON from datasets.yaml + its metadata_file sources
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
 │   └── datasets.yaml          # Shared dataset/resource config — generated, gitignored;
@@ -716,6 +784,25 @@ genetics-results-db/
     Reads `gs://<bucket>/<prefix>mpra/siraj_mpra/siraj_mpra.tsv.gz` and injects `dataset=siraj_mpra`, since — unlike the open-chromatin and variant-effect files — the MPRA LONG file has no `dataset` column.
 
 These four loaders default `GCS_BUCKET` to the placeholder `bucket-name`, so set `GCS_BUCKET` (and `GCS_PREFIX`, e.g. `results_api_data/` for finngen-commons, empty for the daly layout) explicitly.
+
+13. **Build and load the phenotype/dataset metadata tables** (full rebuild via `WRITE_TRUNCATE`):
+    ```bash
+    PROFILE=finngen ./scripts/load_phenotypes.sh
+    ```
+    `build_phenotypes.py` reads the synced `configs/datasets.yaml` and every `metadata_file` it references from GCS, harmonizes them (mirroring genetics-results-api's `MetadataHarmonizer`), and writes two NEWLINE_DELIMITED_JSON files that `load_data.py` loads. **Re-run after any change to `datasets.yaml` or a metadata file** — nothing else propagates registry edits into BigQuery.
+
+    `PROFILE` selects both the dataset registry and, through the registry's `metadata_file` URIs, the bucket the metadata is read from; `GCS_BUCKET`/`GCS_PREFIX` only control where the generated NDJSON is staged (default `finngen-commons` / `results_api_data/mapping_files/`).
+
+    The builder owns `BQ_DATASETS_BY_DATASET_ID`, the registry-key → results-view-`dataset` map. That value is baked into the source credible-set TSVs by genetics-results-munge and `datasets.yaml` never records it, so **a new dataset must be added there** or it gets a `datasets` row with `dataset = NULL` and no `phenotypes` rows. The loader cross-checks the map against the live results tables — every `dataset` column in the ten results tables that carry one, `coloc_credsets` included (`peak_to_gene` and `variant_annotation` are excluded: neither has a meaningful `dataset`) — in **all** directions, and any mismatch **fails the build**:
+
+- a live `dataset` value with no registry entry,
+- a registry claim that no results table contains,
+- a `phenotypes` row keyed on a `dataset` no results table contains,
+- a name in `ABSENT_FROM_RESULTS` that has since become live.
+
+If the cross-check query itself returns nothing (bad auth, quota, a renamed table) the loader **refuses to run** rather than loading unvalidated; `ALLOW_UNVALIDATED=1` overrides both that and the mismatch failures.
+
+`build_phenotypes.ABSENT_FROM_RESULTS` records the names deliberately mapped but absent from BigQuery — today `IIBDGC` (registered, credible sets not loaded) and six eQTL Catalogue sub-studies (`QTD000736`, `QTD000863`, `QTD000865`, `QTD000869`, `QTD000910`, `QTD000915`) that are in the collection metadata but not in the imported release. They are emitted with `dataset = NULL` and contribute no `phenotypes` rows, so nothing points at an empty result.
 
 ### API deployment
 

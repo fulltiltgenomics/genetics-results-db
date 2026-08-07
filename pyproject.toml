@@ -14,3 +14,10 @@ dependencies = [
     "polars>=1.37.0",
     "gcsfs>=2026.4.0",
 ]
+
+[project.optional-dependencies]
+# httpx is what starlette's TestClient drives, so tests/ cannot even import without it
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]

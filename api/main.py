@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import logging
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -160,9 +161,38 @@ def _internal_job_config() -> bigquery.QueryJobConfig:
     return bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_BILLED)
 
 # expose views (not underlying tables) so AI agents use the enriched schemas
-VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "asm_qtl_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "mpra_v", "variant_annotation_v", "peak_to_gene_v"]
+VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "asm_qtl_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "mpra_v", "variant_annotation_v", "peak_to_gene_v", "phenotypes_v", "datasets_v"]
 # map base table names to views for backwards-compatible query auto-qualification
 _BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
+# every name /query accepts unqualified -> the view it resolves to (views map to themselves)
+_QUALIFY_TARGETS = {**{name: name for name in VIEWS}, **_BASE_TABLES}
+
+
+def _qualify_tables(sql: str) -> str:
+    """Qualify unqualified view/base-table names with the project and dataset.
+
+    Only genuine table positions - a name directly after FROM or JOIN - are rewritten.
+    The previous implementation replaced every occurrence of " <name>", which also hit
+    ordinary English inside string literals now that `datasets` and `phenotypes` are
+    table names: `LIKE '%uk biobank datasets%'` became
+    `LIKE '%uk biobank ``project.dataset.datasets_v``%'`, which is still valid SQL and
+    silently matched nothing, and `COUNT(*) AS datasets ... ORDER BY datasets` had its
+    alias rewritten. `\\s+` rather than a literal space because a multi-line
+    `FROM\\n  credible_sets_v` is a normal shape.
+
+    RESIDUAL: a string literal that itself contains the words "FROM <table>" or
+    "JOIN <table>" is still rewritten - telling that apart from real SQL needs a parser,
+    which is out of scope. The result is still checked by authorize_query.
+    """
+    for name, view in _QUALIFY_TARGETS.items():
+        fq = f"`{PROJECT_ID}.{DATASET_ID}.{view}`"
+        sql = re.sub(
+            rf"\b(FROM|JOIN)(\s+){re.escape(name)}\b",
+            lambda m, fq=fq: f"{m.group(1)}{m.group(2)}{fq}",
+            sql,
+            flags=re.IGNORECASE,
+        )
+    return sql
 
 # load all metadata from shared datasets.yaml (single source of truth)
 try:
@@ -526,17 +556,7 @@ async def execute_query(request: QueryRequest):
     start_time = time.perf_counter()
     sql = request.sql
 
-    # auto-qualify table names and redirect base table names to views
-    for view in VIEWS:
-        fq = f"`{PROJECT_ID}.{DATASET_ID}.{view}`"
-        sql = sql.replace(f" {view}", f" {fq}")
-        sql = sql.replace(f"FROM {view}", f"FROM {fq}")
-        sql = sql.replace(f"JOIN {view}", f"JOIN {fq}")
-    for base, view in _BASE_TABLES.items():
-        fq = f"`{PROJECT_ID}.{DATASET_ID}.{view}`"
-        sql = sql.replace(f" {base}", f" {fq}")
-        sql = sql.replace(f"FROM {base}", f"FROM {fq}")
-        sql = sql.replace(f"JOIN {base}", f"JOIN {fq}")
+    sql = _qualify_tables(sql)
 
     job_config = bigquery.QueryJobConfig(
         maximum_bytes_billed=MAX_BYTES_BILLED,

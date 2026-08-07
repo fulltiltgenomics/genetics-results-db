@@ -319,11 +319,52 @@ SCHEMAS = {
         bigquery.SchemaField("hurdle_bic", "FLOAT64"),
         bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
     ],
+    # modes mirror schemas/phenotypes.sql: only the join key, its provenance and the
+    # coloc-partner flag are REQUIRED. Names, trait types and sample sizes are genuinely
+    # missing for some source rows and must stay NULLABLE rather than be defaulted.
+    "phenotypes": [
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("trait_original", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("trait_name", "STRING"),
+        bigquery.SchemaField("trait_type", "STRING"),
+        bigquery.SchemaField("category", "STRING"),
+        bigquery.SchemaField("n_samples", "INT64"),
+        bigquery.SchemaField("n_cases", "INT64"),
+        bigquery.SchemaField("n_controls", "INT64"),
+        bigquery.SchemaField("dataset_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("resource", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("author", "STRING"),
+        bigquery.SchemaField("publication_date", "DATE"),
+        bigquery.SchemaField("version", "STRING"),
+        bigquery.SchemaField("coloc_partner_only", "BOOL", mode="REQUIRED"),
+    ],
+    # `dataset` is NULLABLE on purpose: a registry entry with no BigQuery presence still
+    # gets a row. dataset_ids/resource_aliases are REPEATED, so this table is JSON-loaded.
+    "datasets": [
+        bigquery.SchemaField("dataset", "STRING"),
+        bigquery.SchemaField("dataset_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("dataset_ids", "STRING", mode="REPEATED"),
+        bigquery.SchemaField("resource", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("resource_label", "STRING"),
+        bigquery.SchemaField("resource_aliases", "STRING", mode="REPEATED"),
+        bigquery.SchemaField("version", "STRING"),
+        bigquery.SchemaField("description", "STRING"),
+        bigquery.SchemaField("author", "STRING"),
+        bigquery.SchemaField("publication_date", "DATE"),
+        bigquery.SchemaField("data_type", "STRING"),
+        bigquery.SchemaField("trait_type", "STRING"),
+        bigquery.SchemaField("n_samples", "INT64"),
+        bigquery.SchemaField("pseudo_credible_sets", "BOOL", mode="REQUIRED"),
+        bigquery.SchemaField("coloc_partner_only", "BOOL", mode="REQUIRED"),
+        bigquery.SchemaField("collection", "BOOL", mode="REQUIRED"),
+        bigquery.SchemaField("subdataset_of", "STRING"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
-# REPEATED/ARRAY columns, which the CSV loader cannot populate)
-JSON_SCHEMAS = {"gene_annotations"}
+# REPEATED/ARRAY columns, which the CSV loader cannot populate, and for the nullable
+# INT64/DATE columns of the metadata tables, which CSV would coerce)
+JSON_SCHEMAS = {"gene_annotations", "phenotypes", "datasets"}
 
 # tables whose source TSV encodes the `chr` column as a string but whose BigQuery
 # column is INT64. The same file is served to the tabix API, whose seqnames are now

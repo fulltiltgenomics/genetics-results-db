@@ -26,6 +26,8 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/load_peak_to_gene.sh](scripts/load_peak_to_gene.sh) loads Open4Gene peak-to-gene links (truncates `peak_to_gene`), which join peak-keyed caQTL credible sets to genes
 
+[scripts/load_phenotypes.sh](scripts/load_phenotypes.sh) builds and loads the `phenotypes` and `datasets` metadata tables from `datasets.yaml` and the metadata files it references; re-run after any registry change
+
 [scripts/load_open_chromatin.sh](scripts/load_open_chromatin.sh) loads the open-chromatin atlas (6 datasets)
 
 [scripts/load_variant_effect.sh](scripts/load_variant_effect.sh) loads in-silico predicted variant effects on chromatin accessibility (ChromBPNet, FLARE)
@@ -43,6 +45,14 @@ Requires [uv](https://docs.astral.sh/uv/):
 ```bash
 uv venv
 uv pip install -r pyproject.toml
+```
+
+To run `tests/` as well, install the dev extra (pytest and httpx, which starlette's
+`TestClient` needs) and run pytest from the repo root:
+
+```bash
+uv pip install -e '.[dev]'
+pytest tests/
 ```
 
 ## Run the REST API server
@@ -121,6 +131,8 @@ Queries go through a view (`<table>_v`) per table, which adds derived columns su
 - **mpra** — measured cis-regulatory allelic activity from a reporter assay (Siraj et al.)
 - **variant_annotation** — FinnGen R14 per-variant functional annotations and allele frequencies
 - **peak_to_gene** — Open4Gene peak-to-gene links, joining peak-keyed caQTL results to genes
+- **phenotypes** — trait metadata behind the results tables' phenotype codes, keyed by `(dataset, trait_original)`
+- **datasets** — dataset registry: what each results-view `dataset` value is, its resource, version and credible-set caveats
 
 ## License
 
