@@ -55,6 +55,17 @@ import yaml
 # row, with dataset = NULL.
 BQ_DATASETS_BY_DATASET_ID = {
     "finngen_gwas": ["FinnGen_R14"],
+    # hla_associations spells its trait column `phenotype`, and its values ARE the R14
+    # endpoint codes (all 2,712 distinct ones join FinnGen_R14 phenotypes). It still gets its
+    # own phenotype rows rather than borrowing FinnGen_R14's, because `datasets` has a row for
+    # finngen_hla and the documented, tool-advertised join is
+    #   p.dataset = <the results view's dataset> AND p.trait_original = <code>.
+    # Without finngen_hla rows that join returns ZERO ROWS SILENTLY for the one dataset this
+    # whole cross-check exists to fix, and resolving HLA trait names would instead require an
+    # agent to know out of band that finngen_hla is secretly R14 - a special case with no
+    # discoverable signal anywhere in the schema. (FinnGen_R12 likewise duplicates 2,315 of
+    # R14's codes, so per-dataset duplication is already the table's normal shape.)
+    "finngen_hla": ["finngen_hla"],
     "finngen_gwas_r12": ["FinnGen_R12"],
     "finngen_kanta": ["FinnGen_kanta"],
     # the R12 Kanta fine-mapping shares the results-view name with the current R14 Kanta
@@ -104,9 +115,10 @@ BQ_DATASETS_BY_DATASET_ID = {
     "siraj_mpra": ["siraj_mpra"],
 }
 
-# results-view `dataset` names the registry claims but that NO results table actually
-# contains (checked live against all ten tables that carry a `dataset` column, including
-# coloc_credsets). Emitting them as queryable datasets is the failure this whole table exists
+# results-view `dataset` names the registry claims but that NO results view actually
+# contains (checked live against every view api/main.py exposes that carries a `dataset`
+# column - see scripts/live_dataset_scope.py, which derives that set rather than listing it).
+# Emitting them as queryable datasets is the failure this whole table exists
 # to prevent: an agent filtering on them gets an empty result with no hint why. They are
 # instead emitted with dataset = NULL, the table's documented "exists in the registry, has no
 # BigQuery presence" state, and contribute no `phenotypes` rows.

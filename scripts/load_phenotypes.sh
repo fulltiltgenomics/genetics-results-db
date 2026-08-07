@@ -47,28 +47,33 @@ fi
 ts "Loading phenotype/dataset metadata into ${PROJECT_ID}.${DATASET_ID} (profile=${PROFILE})"
 
 # the registry key -> results-view `dataset` mapping lives in build_phenotypes.py and cannot
-# be derived from config, so cross-check it against what the results tables actually contain;
-# the builder FAILS on any mismatch it has not been told to expect
-ts "Collecting live results-view dataset names for cross-check..."
-live_datasets=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
+# be derived from config, so cross-check it against what the results views actually contain;
+# the builder FAILS on any mismatch it has not been told to expect.
+#
+# The scope of that cross-check is DERIVED from api/main.py's VIEWS list rather than written
+# out here (see scripts/live_dataset_scope.py): a hardcoded table list makes a brand-new table
+# invisible to the check, which is how hla_associations shipped with no `datasets` row while
+# this loader reported success.
+ts "Deriving cross-check scope from api/main.py VIEWS..."
+dataset_columns=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
   --max_rows=100000 "
-  SELECT STRING_AGG(DISTINCT d, ',') FROM (
-    SELECT dataset AS d FROM \`${PROJECT_ID}.${DATASET_ID}.credible_sets\` GROUP BY d
-    UNION ALL SELECT dataset1 FROM \`${PROJECT_ID}.${DATASET_ID}.colocalization\` GROUP BY 1
-    UNION ALL SELECT dataset2 FROM \`${PROJECT_ID}.${DATASET_ID}.colocalization\` GROUP BY 1
-    UNION ALL SELECT dataset FROM \`${PROJECT_ID}.${DATASET_ID}.coloc_credsets\` GROUP BY 1
-    UNION ALL SELECT dataset FROM \`${PROJECT_ID}.${DATASET_ID}.exome_variant_results\` GROUP BY 1
-    UNION ALL SELECT dataset FROM \`${PROJECT_ID}.${DATASET_ID}.gene_burden_results\` GROUP BY 1
-    UNION ALL SELECT dataset FROM \`${PROJECT_ID}.${DATASET_ID}.asm_qtl\` GROUP BY 1
-    UNION ALL SELECT dataset FROM \`${PROJECT_ID}.${DATASET_ID}.open_chromatin\` GROUP BY 1
-    UNION ALL SELECT dataset FROM \`${PROJECT_ID}.${DATASET_ID}.variant_effect\` GROUP BY 1
-    UNION ALL SELECT dataset FROM \`${PROJECT_ID}.${DATASET_ID}.mpra\` GROUP BY 1
-  )" 2>/dev/null | tail -1 | tr -d '"') || live_datasets=""
-# peak_to_gene and variant_annotation are deliberately absent: neither carries a meaningful
-# `dataset` column (they are coordinate/annotation reference tables), so unioning them would
-# only add non-registry noise to the cross-check.
-# STRING_AGG produces one comma-bearing CSV field, which bq quotes; the quotes are stripped
-# above so the first and last names are not mangled into "X and Y"
+  SELECT table_name, column_name
+  FROM \`${PROJECT_ID}.${DATASET_ID}.INFORMATION_SCHEMA.COLUMNS\`
+  WHERE column_name IN ('dataset', 'dataset1', 'dataset2')" 2>/dev/null) || dataset_columns=""
+
+live_sql=$(printf '%s' "${dataset_columns}" | python3 "${SCRIPT_DIR}/live_dataset_scope.py" \
+  --views-file "${SCRIPT_DIR}/../api/main.py" \
+  --project-id "${PROJECT_ID}" --dataset-id "${DATASET_ID}") || live_sql=""
+
+ts "Collecting live results-view dataset names for cross-check..."
+if [ -n "${live_sql}" ]; then
+  # STRING_AGG produces one comma-bearing CSV field, which bq quotes; the quotes are stripped
+  # so the first and last names are not mangled into "X and Y"
+  live_datasets=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
+    --max_rows=100000 "${live_sql}" 2>/dev/null | tail -1 | tr -d '"') || live_datasets=""
+else
+  live_datasets=""
+fi
 
 # an empty result means the cross-check could not run - bad auth, quota, a renamed table.
 # build_phenotypes.py treats an empty --validate-against as "nothing to check" and would
@@ -76,7 +81,9 @@ live_datasets=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --f
 # itself off exactly when the environment is broken. Refuse instead.
 if [ -z "${live_datasets}" ]; then
   ts "ERROR: could not read live results-view dataset names - the registry cross-check cannot run."
-  ts "       Check credentials, quota and that the results tables exist in ${PROJECT_ID}.${DATASET_ID}."
+  ts "       Check credentials, quota and that the views exist in ${PROJECT_ID}.${DATASET_ID}."
+  ts "       A live_dataset_scope.py error above means a view api/main.py exposes has no"
+  ts "       dataset-bearing column and is not in its EXCLUDED_VIEWS list."
   if [ "${ALLOW_UNVALIDATED:-0}" != "1" ]; then
     ts "       Refusing to load unvalidated. Set ALLOW_UNVALIDATED=1 to override."
     exit 1

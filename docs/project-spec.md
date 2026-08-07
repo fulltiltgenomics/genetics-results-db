@@ -698,6 +698,7 @@ genetics-results-db/
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   ├── load_phenotypes.sh         # Build + load phenotypes and datasets metadata tables (WRITE_TRUNCATE)
+│   ├── live_dataset_scope.py      # Derives the registry cross-check scope from api/main.py's VIEWS
 │   ├── build_phenotypes.py        # Build phenotypes/datasets NDJSON from datasets.yaml + its metadata_file sources
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
@@ -829,14 +830,20 @@ These four loaders default `GCS_BUCKET` to the placeholder `bucket-name`, so set
 
     `PROFILE` selects both the dataset registry and, through the registry's `metadata_file` URIs, the bucket the metadata is read from; `GCS_BUCKET`/`GCS_PREFIX` only control where the generated NDJSON is staged (default `finngen-commons` / `results_api_data/mapping_files/`).
 
-    The builder owns `BQ_DATASETS_BY_DATASET_ID`, the registry-key → results-view-`dataset` map. That value is baked into the source credible-set TSVs by genetics-results-munge and `datasets.yaml` never records it, so **a new dataset must be added there** or it gets a `datasets` row with `dataset = NULL` and no `phenotypes` rows. The loader cross-checks the map against the live results tables — every `dataset` column in the ten results tables that carry one, `coloc_credsets` included (`peak_to_gene` and `variant_annotation` are excluded: neither has a meaningful `dataset`) — in **all** directions, and any mismatch **fails the build**:
+    The builder owns `BQ_DATASETS_BY_DATASET_ID`, the registry-key → results-view-`dataset` map. That value is baked into the source credible-set TSVs by genetics-results-munge and `datasets.yaml` never records it, so **a new dataset must be added there** or it gets a `datasets` row with `dataset = NULL` and no `phenotypes` rows. The loader cross-checks the map against the live views in **all** directions, and any mismatch **fails the build**:
 
 - a live `dataset` value with no registry entry,
 - a registry claim that no results table contains,
 - a `phenotypes` row keyed on a `dataset` no results table contains,
 - a name in `ABSENT_FROM_RESULTS` that has since become live.
 
-If the cross-check query itself returns nothing (bad auth, quota, a renamed table) the loader **refuses to run** rather than loading unvalidated; `ALLOW_UNVALIDATED=1` overrides both that and the mismatch failures.
+The **scope** of that cross-check is derived, not listed. `scripts/live_dataset_scope.py` parses the `VIEWS` list out of `api/main.py` (with `ast`, and strictly: if `VIEWS` is assembled rather than written as one list literal — `+ EXTRA`, `.append()`, `+=`, a rebind — the parse **fails** instead of returning the literal's short prefix, because a short list yields valid SQL over fewer views and hides the rest), reads `INFORMATION_SCHEMA.COLUMNS` for the `dataset` / `dataset1` / `dataset2` columns, and generates the `UNION ALL` the loader runs. Anything the API exposes is therefore in scope automatically: a newly added view puts its `dataset` values in front of the check the moment it is exposed, and an unmapped value fails the build. The earlier version unioned nine hardcoded table names, which meant a brand-new table contributed nothing and its drift could not be detected — the check failed *open* for exactly the case where drift is most likely. That is how `hla_associations` reached BigQuery with a `datasets` table holding zero `finngen_hla` rows while this loader reported success.
+
+Views leave that scope only through `live_dataset_scope.EXCLUDED_VIEWS`, which stores a reason per entry: `gene_annotations_v` and `variant_annotation_v` are reference tables with no `dataset` column, and `phenotypes_v` / `datasets_v` are built *from* the map under test, so including them would make the check confirm itself. A view that is neither excluded nor has a dataset-bearing column **fails loudly** — being skipped for a missing column is the same fail-open trap one level down. (`peak_to_gene_v` is deliberately *not* excluded: contrary to an earlier note here it does carry a `dataset` column, a constant `FinnGen_ATACseq`, and including it costs nothing.)
+
+If the cross-check query itself returns nothing (bad auth, quota, a renamed view) the loader **refuses to run** rather than loading unvalidated; `ALLOW_UNVALIDATED=1` overrides both that and the mismatch failures.
+
+`hla_associations` names its trait column **`phenotype`** — a third spelling alongside `trait` and `trait_original`. Its 2,712 codes are the FinnGen R14 endpoint codes, but `finngen_hla` still gets its own `phenotypes` rows rather than borrowing `FinnGen_R14`'s: the table is keyed on `(dataset, trait_original)` so that every results-view `dataset` resolves its own names with one uniform join, and `FinnGen_R12` already duplicates 2,315 of R14's codes for the same reason. The join is `p.dataset = 'finngen_hla' AND p.trait_original = h.phenotype`.
 
 `build_phenotypes.ABSENT_FROM_RESULTS` records the names deliberately mapped but absent from BigQuery — today `IIBDGC` (registered, credible sets not loaded) and six eQTL Catalogue sub-studies (`QTD000736`, `QTD000863`, `QTD000865`, `QTD000869`, `QTD000910`, `QTD000915`) that are in the collection metadata but not in the imported release. They are emitted with `dataset = NULL` and contribute no `phenotypes` rows, so nothing points at an empty result.
 
