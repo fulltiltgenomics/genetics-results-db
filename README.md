@@ -34,6 +34,8 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/load_mpra.sh](scripts/load_mpra.sh) loads measured MPRA allelic activity (truncates `mpra`)
 
+[scripts/load_hla.sh](scripts/load_hla.sh) loads FinnGen R14 classical HLA allele associations (truncates `hla_associations`)
+
 [scripts/load_variant_annotation.sh](scripts/load_variant_annotation.sh) loads FinnGen R14 per-variant functional annotations (truncates `variant_annotation`)
 
 [scripts/load_gene_annotations.sh](scripts/load_gene_annotations.sh) builds and loads the HGNC/GENCODE gene reference table (truncates `gene_annotations`)
@@ -131,6 +133,7 @@ Queries go through a view (`<table>_v`) per table, which adds derived columns su
 - **mpra** — measured cis-regulatory allelic activity from a reporter assay (Siraj et al.)
 - **variant_annotation** — FinnGen R14 per-variant functional annotations and allele frequencies
 - **peak_to_gene** — Open4Gene peak-to-gene links, joining peak-keyed caQTL results to genes
+- **hla_associations** — classical HLA allele associations (FinnGen R14; keyed by allele, not by variant)
 - **phenotypes** — trait metadata behind the results tables' phenotype codes, keyed by `(dataset, trait_original)`
 - **datasets** — dataset registry: what each results-view `dataset` value is, its resource, version and credible-set caveats
 

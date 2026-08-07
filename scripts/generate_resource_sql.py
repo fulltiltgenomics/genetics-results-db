@@ -30,6 +30,7 @@ ALL_VIEWS = [
     "variant_effect_v",
     "mpra_v",
     "peak_to_gene_v",
+    "hla_associations_v",
 ]
 
 # colocalization_v maps dataset1->resource1 and dataset2->resource2
