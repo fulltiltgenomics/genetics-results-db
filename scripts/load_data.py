@@ -411,7 +411,13 @@ def load_table(
     When `const_columns` is empty/None: loads directly with the full schema
     (original behavior). When provided: the source file is expected to omit
     those columns, and the values are injected via a staging-table indirection.
-    Returns the job that produced rows in the target table.
+
+    Returns (job, rows_written) for the job that produced rows in the target
+    table. `rows_written` is None on the direct path, where the job has not been
+    awaited yet and the caller reads it off the completed LoadJob; the staging
+    path has necessarily already awaited its jobs and returns the count, because
+    BigQuery publishes no rows-written statistic for the SELECT it ends with
+    (see the staging branch).
     """
 
     if table_type not in SCHEMAS:
@@ -454,7 +460,8 @@ def load_table(
                 null_marker="NA",
             )
         print(f"Loading {gcs_uri} into {table_id}...")
-        return client.load_table_from_uri(gcs_uri, table_id, job_config=job_config)
+        # left un-awaited so the caller's error handling can report job.errors
+        return client.load_table_from_uri(gcs_uri, table_id, job_config=job_config), None
 
     schema_by_name = {f.name: f for f in full_schema}
     unknown = sorted(set(const_columns) - set(schema_by_name))
@@ -487,7 +494,8 @@ def load_table(
     print(f"Loading {gcs_uri} into staging {staging_id}...")
     load_job = client.load_table_from_uri(gcs_uri, staging_id, job_config=load_config)
     load_job.result()
-    print(f"  staged {load_job.output_rows} rows")
+    staged_rows = load_job.output_rows
+    print(f"  staged {staged_rows} rows")
 
     try:
         # project staging into the target with constants filled in
@@ -520,7 +528,13 @@ def load_table(
         print(f"Projecting staging -> {table_id} ({consts_repr})...")
         query_job = client.query(sql, job_config=query_config)
         query_job.result()
-        return query_job
+        # BigQuery reports no rows-written statistic for a SELECT into a destination
+        # table: it is not DML, so num_dml_affected_rows stays unset, and result() /
+        # the destination's num_rows both describe the table AFTER the write, which
+        # over-reports under WRITE_APPEND once earlier files are already in it. The
+        # projection is an unfiltered 1:1 SELECT over the staging table, so the rows
+        # it wrote are exactly the rows staged.
+        return query_job, staged_rows
     finally:
         client.delete_table(staging_id, not_found_ok=True)
         print(f"  dropped staging {staging_id}")
@@ -572,7 +586,7 @@ def main():
     client = bigquery.Client(project=args.project)
     table_id = f"{args.project}.{args.dataset}.{args.table}"
 
-    job = load_table(
+    job, rows = load_table(
         client,
         args.gcs_uri,
         table_id,
@@ -585,9 +599,8 @@ def main():
     # wait for job to complete (a no-op when load_table already awaited)
     try:
         job.result()
-        rows = getattr(job, "output_rows", None)
         if rows is None:
-            rows = getattr(job, "num_dml_affected_rows", None)
+            rows = job.output_rows
         print(f"Loaded {rows} rows into {table_id}")
     except Exception as e:
         print(f"Error loading data: {e}")
