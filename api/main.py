@@ -21,6 +21,11 @@ from pydantic import BaseModel, Field
 from google.cloud import bigquery
 from google.api_core.exceptions import BadRequest, Forbidden
 
+try:  # packaged as `api.` in the image, run as a bare module in some scripts
+    from api import sandbox_auth
+except ImportError:  # pragma: no cover
+    import sandbox_auth
+
 
 class _GCPJsonFormatter(logging.Formatter):
     """JSON formatter compatible with GCP Cloud Logging."""
@@ -68,33 +73,75 @@ INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 # kubelet probes and the monitor CronJob poll /health with no credentials
 _UNAUTHENTICATED_PATHS = {"/health"}
 
+# marks a request verified by the shared secret; the sandbox path leaves a SandboxPrincipal
+_INTERNAL_PRINCIPAL = "internal"
+
 
 def require_auth(request: Request) -> None:
-    """Require the shared internal secret on every endpoint except /health.
+    """Authenticate the caller: a sandbox execution token, or the shared internal secret.
 
-    This service has no user-facing identity: its only callers are chat-backend and
-    mcp-server, which already send `Authorization: Bearer $INTERNAL_API_SECRET` on every
-    request. Before this the sole control was the cluster NetworkPolicy, and mcp-server sits
-    on both sides of that boundary — anything able to reach mcp-server could reach BigQuery
-    through it.
+    The shared-secret path serves chat-backend and mcp-server, which already send
+    `Authorization: Bearer $INTERNAL_API_SECRET` on every request. Before this the sole
+    control was the cluster NetworkPolicy, and mcp-server sits on both sides of that boundary
+    — anything able to reach mcp-server could reach BigQuery through it. That path
+    deliberately fails open when the secret is unset, so a cluster that has not yet wired the
+    env var keeps serving rather than hard-failing mid-rollout.
 
-    Deliberately fails open when the secret is unset, so a cluster that has not yet wired the
-    env var keeps serving rather than hard-failing mid-rollout. The startup warning below is
-    the signal that an instance is running unprotected.
+    The sandbox path does **not** inherit that. A sandbox-shaped bearer (JOSE `alg: HS256`,
+    see sandbox_auth) is routed to the sandbox validator *before* the unset-secret early
+    return can short-circuit it, and a failure there is a hard 401 — never a fallthrough to
+    the shared-secret comparison, which would degrade a malformed token into "is this string
+    equal to the secret". The sandbox is the one caller whose input is attacker-authored.
+
+    The resolved principal is left on `request.state.principal` (None for the fail-open and
+    /health cases) so handlers can key per-credential behaviour on it.
     """
-    if not INTERNAL_API_SECRET or request.url.path in _UNAUTHENTICATED_PATHS:
+    request.state.principal = None
+    if request.url.path in _UNAUTHENTICATED_PATHS:
         return
+
     auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+
+    if token and sandbox_auth.is_sandbox_shaped(token):
+        try:
+            principal = sandbox_auth.verify_sandbox_token(token)
+        except sandbox_auth.SandboxTokenError as exc:
+            logger.warning({
+                "message": "sandbox token rejected",
+                "log_type": "endpoint_access",
+                "path": request.url.path,
+                "reason": str(exc),
+            })
+            raise HTTPException(status_code=401, detail="Unauthorized") from None
+        request.state.principal = principal
+        logger.info({
+            "message": "sandbox request authorized",
+            "log_type": "endpoint_access",
+            "path": request.url.path,
+            "principal": "sandbox",
+            "sub": principal.user,
+            "sid": principal.session_id,
+            "jti": principal.execution_id,
+        })
+        return
+
+    if not INTERNAL_API_SECRET:
+        return
     if not auth_header.startswith("Bearer ") or not hmac.compare_digest(
-        auth_header[7:], INTERNAL_API_SECRET
+        token, INTERNAL_API_SECRET
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    request.state.principal = _INTERNAL_PRINCIPAL
 
 
 if not INTERNAL_API_SECRET:
     logger.warning(
         "INTERNAL_API_SECRET is not set: every endpoint is reachable without authentication"
     )
+
+# refuses to start rather than warn when the sandbox is deployed and either secret is missing
+sandbox_auth.require_sandbox_config(INTERNAL_API_SECRET)
 
 app = FastAPI(
     title="Genetics Results API",
