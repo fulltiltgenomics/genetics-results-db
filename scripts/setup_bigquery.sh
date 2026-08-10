@@ -3,11 +3,28 @@
 
 set -euo pipefail
 
+#
+# Two behaviours, and the difference matters more than it looks:
+#
+#   without --recreate : every schemas/*.sql runs as CREATE TABLE IF NOT EXISTS, so an
+#                        EXISTING table is left completely untouched. Editing a schema
+#                        file and re-running this script is a SILENT NO-OP — no error,
+#                        no warning, no change. Partitioning, clustering and columns
+#                        cannot be altered this way.
+#   with --recreate    : every table is `bq rm -f -t`'d first. This DESTROYS ALL DATA
+#                        IN EVERY TABLE, not just the one whose schema you edited.
+#
+# Changing a table's clustering or partitioning therefore needs a deliberate rebuild,
+# not this script. See docs/credible-sets-clustering-swap.md for the pattern.
+
 usage() {
-  echo "Usage: $0 [--recreate]"
+  echo "Usage: $0 [--recreate] [--yes]"
   echo ""
   echo "Options:"
-  echo "  --recreate    Drop and recreate existing tables (WARNING: deletes all data)"
+  echo "  --recreate    Drop and recreate EVERY table (WARNING: deletes all data in all"
+  echo "                tables, not only ones whose schema changed). Without it, existing"
+  echo "                tables are never modified — schema edits are a silent no-op."
+  echo "  --yes         Skip the confirmation prompt for --recreate (for automation)"
   echo ""
   echo "Environment variables:"
   echo "  PROJECT_ID    GCP project ID (default: gcloud config)"
@@ -17,11 +34,16 @@ usage() {
 }
 
 RECREATE=false
+ASSUME_YES=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --recreate)
       RECREATE=true
+      shift
+      ;;
+    --yes)
+      ASSUME_YES=true
       shift
       ;;
     -h|--help)
@@ -40,7 +62,32 @@ LOCATION="${LOCATION:-europe-west1}"
 
 echo "Setting up BigQuery dataset in project ${PROJECT_ID} in location ${LOCATION}"
 if [ "$RECREATE" = true ]; then
-  echo "WARNING: --recreate flag set, existing tables will be dropped"
+  echo ""
+  echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+  echo "!! --recreate DROPS EVERY TABLE IN ${PROJECT_ID}:${DATASET_ID}"
+  echo "!! ALL DATA IS DESTROYED, in every table, not only ones you changed."
+  echo "!! It cannot be undone once BigQuery time travel expires."
+  echo "!!"
+  echo "!! This is NOT how to change a table's clustering or partitioning."
+  echo "!! See docs/credible-sets-clustering-swap.md for the rebuild pattern."
+  echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+  echo ""
+  echo "Tables that would be dropped, with their current row counts:"
+  bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=pretty --nouse_cache \
+    "SELECT table_id AS table, row_count FROM \`${PROJECT_ID}.${DATASET_ID}.__TABLES__\` ORDER BY row_count DESC" \
+    || echo "  (could not read table list — proceeding is even riskier)"
+  echo ""
+  if [ "$ASSUME_YES" != true ]; then
+    if [ ! -t 0 ]; then
+      echo "Refusing to --recreate non-interactively without --yes." >&2
+      exit 1
+    fi
+    read -r -p "Type the dataset name (${DATASET_ID}) to confirm destruction: " confirm
+    if [ "${confirm}" != "${DATASET_ID}" ]; then
+      echo "Aborted." >&2
+      exit 1
+    fi
+  fi
 fi
 
 # create dataset if it doesn't exist

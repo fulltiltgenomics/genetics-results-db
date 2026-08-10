@@ -28,8 +28,8 @@ genetics-results-db is a BigQuery-based database solution for storing and queryi
 GCS (tsv.gz files)
       ↓ (one-time load via bq load)
 BigQuery Dataset
-  ├── credible_sets (partitioned by chr, clustered by dataset, data_type, most_severe)
-  │   └── credible_sets_v (view: adds variant, resource columns)
+  ├── credible_sets (partitioned by chr, clustered by data_type, resource, variant, pos)
+  │   └── credible_sets_v (view: adds maf; variant and resource are stored columns)
   ├── colocalization (partitioned by chr, clustered by dataset pairs)
   │   └── colocalization_v (view: adds resource columns)
   ├── coloc_credsets (partitioned by chr, clustered by dataset, data_type)
@@ -70,9 +70,21 @@ AI Agents / Applications
 
 Fine-mapped credible set variants from multiple genetics datasets.
 
+`resource` and `variant` are **stored** columns here, unlike in the other product tables
+where `resource` is a view-derived `CASE`. They are the clustering keys, and a view-derived
+column prunes nothing — before the change, `WHERE resource = 'finngen'` on the view scanned
+*more* than an unfiltered scan, because the `CASE` forced an extra read of `dataset`.
+Clustering on the two columns callers actually filter by cut the weighted cost of the
+commonest logged query shapes by 87%. Consequences: `resource` is materialised by
+`scripts/load_data.py` (`DERIVED_COLUMNS`) from the `datasets.yaml` rules, so a mapping-rule
+change needs a reload or backfill rather than just re-creating the view; and filtering by
+`dataset`, `gene_most_severe` or `most_severe` is now slower than filtering by `resource`.
+See [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md).
+
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
 | dataset | STRING | Yes | Source dataset (FinnGen_R14, Open_Targets_26.06, etc.) |
+| resource | STRING | Yes | Resource identifier (lowercase), derived from `dataset` at load time. Clustering key — filter on this, not `dataset` |
 | data_type | STRING | Yes | GWAS, eQTL, pQTL, sQTL, caQTL |
 | trait | STRING | Yes | Phenotype/trait name. For `caQTL` rows this is a chromatin peak id (`chr-start-end`), never a gene — reach genes via [peak_to_gene](#peak_to_gene) |
 | trait_original | STRING | Yes | Original trait name |
@@ -81,6 +93,7 @@ Fine-mapped credible set variants from multiple genetics datasets.
 | pos | INT64 | Yes | Position |
 | ref | STRING | Yes | Reference allele |
 | alt | STRING | Yes | Alternate allele |
+| variant | STRING | Yes | Variant identifier (chr:pos:ref:alt), computed at load time. Clustering key |
 | mlog10p | FLOAT64 | No | -log10(p-value) |
 | beta | FLOAT64 | Yes | Effect size |
 | se | FLOAT64 | No | Standard error |
@@ -495,7 +508,7 @@ Dataset registry: what every `dataset` value appearing in the results views actu
 ### BigQuery Configuration
 
 - **Partitioning**: Result tables partitioned by chromosome using `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`. The small reference/link/metadata tables (`gene_annotations`, `peak_to_gene`, `phenotypes`, `datasets`) are unpartitioned — a full scan of them is cheap and their access is gene-keyed rather than positional.
-- **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables)
+- **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables). `credible_sets` is the exception and the model to copy for high-traffic tables: it clusters on `data_type, resource, variant, pos`, the columns callers are actually told to filter by, which required storing `resource` and `variant` instead of deriving them in the view — clustering cannot use a view-derived expression. Clustering and partitioning cannot be changed in place; see [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md) for the rebuild pattern and why `setup_bigquery.sh` cannot do it.
 
 ### API Service
 
@@ -545,7 +558,7 @@ Every query is authorized before it runs (see Security → Query authorization).
 
 ### Schema Response Format
 
-`/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Column `mode` (NULLABLE/REQUIRED) and `row_count` are read from the underlying base table, since BigQuery views always report every column as NULLABLE. View-only derived columns are declared explicitly: `variant` and `resource`/`resource1`/`resource2` are REQUIRED (non-null transforms of REQUIRED base columns), while `maf` is NULLABLE (`LEAST(aaf, 1-aaf)` with nullable `aaf`). Two shapes:
+`/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Column `mode` (NULLABLE/REQUIRED) and `row_count` are read from the underlying base table, since BigQuery views always report every column as NULLABLE. View-only derived columns are declared explicitly: `variant` and `resource`/`resource1`/`resource2` are REQUIRED (non-null transforms of REQUIRED base columns), while `maf` is NULLABLE (`LEAST(aaf, 1-aaf)` with nullable `aaf`). For `credible_sets_v` the base table now answers for `variant`/`resource` directly — they are stored `NOT NULL` columns there, which is why the schema file declares them `NOT NULL` rather than following the nullable stored `variant` of `variant_effect`/`mpra`/`variant_annotation`: it keeps `/schema` reporting REQUIRED as before. Two shapes:
 
 - `allowed_values`: flat list of valid values (e.g. `resource`, `dataset`, `most_severe`).
 - `allowed_values_by_<col>`: mapping from a parent column's value to the values valid for that parent. Used when a column's valid set depends on another (e.g. `data_type` depends on `resource`, `annotation` depends on `resource`).

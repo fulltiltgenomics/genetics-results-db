@@ -1,20 +1,22 @@
--- View adding derived columns to credible_sets
+-- View adding the derived `maf` column to credible_sets.
+--
+-- `variant` and `resource` are stored columns on the base table (they are clustering
+-- keys — a view-derived column cannot prune anything), so they are NOT re-derived here.
+-- The `resource` CASE now lives in scripts/load_data.py, generated from the
+-- dataset_to_resource_rules in datasets.yaml by scripts/generate_resource_sql.py.
+--
+-- The EXCEPT + explicit re-projection is load-bearing, not cosmetic: the base table
+-- stores `resource` at ordinal 1 and `variant` at ordinal 10, but every downstream
+-- reader (API, MCP tools, browser) sees this view's schema, which must stay
+-- byte-identical to the pre-swap one — the 19 original columns in their original
+-- order, then variant, maf, resource. A bare `SELECT *` would silently reorder it.
+--
+-- `maf` stays derived: nothing filters or clusters on it, so materialising it would
+-- only cost storage.
 CREATE OR REPLACE VIEW `genetics_results.credible_sets_v` AS
 SELECT
-  *,
-  CONCAT(chr, ':', pos, ':', ref, ':', alt) AS variant,
+  * EXCEPT(variant, resource),
+  variant,
   LEAST(aaf, 1 - aaf) AS maf,
-  CASE
-    WHEN LOWER(dataset) LIKE 'finngen%mvp_ukbb%' THEN 'finngen_mvp_ukbb'
-    WHEN LOWER(dataset) LIKE 'finngen%ukbb%' THEN 'finngen_ukbb'
-    WHEN LOWER(dataset) LIKE 'finngen%' THEN 'finngen'
-    WHEN LOWER(dataset) LIKE 'ukb%' THEN 'ukbb'
-    WHEN LOWER(dataset) LIKE 'open_targets%' THEN 'open_targets'
-    WHEN LOWER(dataset) LIKE 'covid19_hgi%' THEN 'covid_hgi'
-    WHEN LOWER(dataset) = 'pgc' THEN 'pgc'
-    WHEN LOWER(dataset) LIKE 'pgc_scz%' THEN 'pgc'
-    WHEN LOWER(dataset) = 'gp2' THEN 'gp2'
-    WHEN LOWER(dataset) = 'iibdgc' THEN 'ibd_gwas'
-    ELSE LOWER(dataset)
-  END AS resource
+  resource
 FROM `genetics_results.credible_sets`;

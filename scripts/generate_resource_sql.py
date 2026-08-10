@@ -36,6 +36,13 @@ ALL_VIEWS = [
 # colocalization_v maps dataset1->resource1 and dataset2->resource2
 COLOC_PAIRS = [("dataset1", "resource1"), ("dataset2", "resource2")]
 
+# views whose `resource` is a STORED column on the base table rather than a CASE in the
+# view SQL, because it is a clustering key (a view-derived column prunes nothing).
+# scripts/load_data.py calls generate_for_view() for these at load time, so the rules
+# still have a single source of truth — but there is no CASE in the .sql file to lint,
+# and the rules only reach the data through a reload or backfill.
+MATERIALIZED_RESOURCE_VIEWS = {"credible_sets_v"}
+
 
 def load_rules(yaml_path):
     with open(yaml_path) as f:
@@ -154,6 +161,18 @@ def lint_view(rules, view_name, schemas_dir):
         sql_text = f.read()
 
     existing_blocks = extract_case_blocks(sql_text)
+
+    if view_name in MATERIALIZED_RESOURCE_VIEWS:
+        # a CASE reappearing here means someone re-derived a stored clustering key
+        if existing_blocks:
+            return False, (
+                f"  {view_name}: resource is a STORED column on the base table, but the "
+                f"view SQL still contains a CASE block — remove it (see "
+                f"MATERIALIZED_RESOURCE_VIEWS)"
+            )
+        return True, f"  {view_name}: OK (resource materialized at load time)"
+
+
     generated = generate_for_view(rules, view_name)
     generated_blocks = extract_case_blocks(generated)
 

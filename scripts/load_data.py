@@ -9,19 +9,31 @@ in the same order. If the file omits a column that the schema requires (e.g. a
 pass `--const-column NAME=VALUE` to inject the value at load time. The data is
 loaded into a temporary staging table (without those columns), then projected
 into the target table with the constants filled in. The flag is repeatable.
+
+The same staging indirection also materialises DERIVED_COLUMNS: columns that are
+computed from other columns of the same row and are likewise absent from the source
+TSV (see `credible_sets.variant` / `credible_sets.resource`).
 """
 
 import argparse
+import os
 import sys
 import uuid
 from google.cloud import bigquery
 from google.cloud.bigquery import LoadJobConfig, SourceFormat, WriteDisposition
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 # schema definitions matching the SQL table definitions
 SCHEMAS = {
+    # `resource` and `variant` are NOT in the source TSV — they are computed on
+    # projection from the staging table (see DERIVED_COLUMNS). They sit here in the
+    # target table's column order, which the projection must match; the staging
+    # schema drops them, so the positional TSV layout is unchanged.
     "credible_sets": [
         bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("resource", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("data_type", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("trait", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("trait_original", "STRING", mode="REQUIRED"),
@@ -30,6 +42,7 @@ SCHEMAS = {
         bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
         bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("variant", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("mlog10p", "FLOAT64"),
         bigquery.SchemaField("beta", "FLOAT64", mode="REQUIRED"),
         bigquery.SchemaField("se", "FLOAT64"),
@@ -426,6 +439,38 @@ CHR_STRING_TO_INT_SQL = (
 )
 
 
+def resource_case_sql(view_name: str) -> str:
+    """CASE expression mapping `dataset` -> `resource`, generated from datasets.yaml.
+
+    The mapping used to be a CASE inside the `*_v` view. `credible_sets.resource` is a
+    clustering key now, and a view-derived column prunes nothing, so it is materialised
+    here instead. Generating the SQL from the shared rules rather than hardcoding it
+    keeps datasets.yaml the single place the mapping is written down — a hardcoded copy
+    would drift silently and mislabel rows for a whole load.
+    """
+    import generate_resource_sql as g
+
+    yaml_path = os.environ.get("DATASETS_YAML")
+    if not yaml_path:
+        local = os.path.join(os.path.dirname(SCRIPT_DIR), "configs", "datasets.yaml")
+        yaml_path = local if os.path.exists(local) else g.DEFAULT_YAML
+    fragment = g.generate_for_view(g.load_rules(yaml_path), view_name)
+    return fragment.removesuffix(" AS resource").strip()
+
+
+# columns computed at load time from other columns of the same row. Like const columns
+# they are absent from the source TSV, are dropped from the staging schema and are filled
+# in on projection — so materialising them requires no change to the source files.
+# Values are SQL expressions over the STAGING table's columns, or a zero-arg callable
+# returning one (used where the expression itself is generated from datasets.yaml).
+DERIVED_COLUMNS = {
+    "credible_sets": {
+        "variant": "CONCAT(`chr`, ':', `pos`, ':', `ref`, ':', `alt`)",
+        "resource": lambda: resource_case_sql("credible_sets_v"),
+    },
+}
+
+
 def _coerce_const(value: str, bq_type: str):
     """Coerce a string CLI argument to the Python type matching the schema field."""
     t = bq_type.upper()
@@ -462,9 +507,24 @@ def load_table(
     const_columns = const_columns or {}
     convert_chr = table_type in CHR_STRING_TABLES
     strip_cell_type_prefix = table_type in CELL_TYPE_PREFIX_TABLES
+    derived_columns = DERIVED_COLUMNS.get(table_type, {})
+
+    if derived_columns and convert_chr:
+        # derived expressions read the STAGING columns, where `chr` is still the raw
+        # source string for these tables — a `variant` built from it would be wrong
+        raise ValueError(
+            f"table '{table_type}' has derived columns and chr-string staging; the "
+            f"derived expressions would see the unconverted `chr`"
+        )
+
+    overlap = sorted(set(const_columns) & set(derived_columns))
+    if overlap:
+        raise ValueError(
+            f"--const-column cannot override computed columns of '{table_type}': {overlap}"
+        )
 
     if table_type in JSON_SCHEMAS and (
-        const_columns or convert_chr or strip_cell_type_prefix
+        const_columns or convert_chr or strip_cell_type_prefix or derived_columns
     ):
         # const-column injection / column rewrites rely on a CSV staging table;
         # they are not wired up for the JSON load path (no current JSON table needs it)
@@ -473,7 +533,9 @@ def load_table(
             f"for JSON-loaded table '{table_type}'"
         )
 
-    needs_staging = bool(const_columns) or convert_chr or strip_cell_type_prefix
+    needs_staging = (
+        bool(const_columns) or convert_chr or strip_cell_type_prefix or bool(derived_columns)
+    )
 
     if not needs_staging:
         # direct-load path: no constant columns to inject, no chr conversion
@@ -508,7 +570,7 @@ def load_table(
     # chr-string column as STRING so it can be regex-converted on projection
     staging_schema = []
     for f in full_schema:
-        if f.name in const_columns:
+        if f.name in const_columns or f.name in derived_columns:
             continue
         if convert_chr and f.name == "chr":
             staging_schema.append(bigquery.SchemaField("chr", "STRING"))
@@ -540,6 +602,11 @@ def load_table(
                 py_value = _coerce_const(const_columns[f.name], f.field_type)
                 col_exprs.append(f"@{pname} AS `{f.name}`")
                 params.append(bigquery.ScalarQueryParameter(pname, f.field_type, py_value))
+            elif f.name in derived_columns:
+                expr = derived_columns[f.name]
+                if callable(expr):
+                    expr = expr()
+                col_exprs.append(f"({expr}) AS `{f.name}`")
             elif convert_chr and f.name == "chr":
                 col_exprs.append(CHR_STRING_TO_INT_SQL.format(col="`chr`") + " AS `chr`")
             elif strip_cell_type_prefix and f.name == "cell_type":
@@ -557,8 +624,9 @@ def load_table(
             create_disposition=bigquery.CreateDisposition.CREATE_IF_NEEDED,
             query_parameters=params,
         )
-        consts_repr = ", ".join(f"{k}={v!r}" for k, v in const_columns.items())
-        print(f"Projecting staging -> {table_id} ({consts_repr})...")
+        annotations = [f"{k}={v!r}" for k, v in const_columns.items()]
+        annotations += [f"computed {name}" for name in derived_columns]
+        print(f"Projecting staging -> {table_id} ({', '.join(annotations)})...")
         query_job = client.query(sql, job_config=query_config)
         query_job.result()
         return query_job
