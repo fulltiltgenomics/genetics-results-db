@@ -9,7 +9,10 @@ import os
 import logging
 import re
 import sys
+import threading
 import time
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -196,16 +199,168 @@ DATASET_ID = os.environ.get("DATASET_ID", "genetics_results")
 MAX_ROWS = int(os.environ.get("MAX_ROWS", "100000"))
 MAX_BYTES_BILLED = int(os.environ.get("MAX_BYTES_BILLED", str(100 * 1024**3)))  # 100 GB default
 
+# Defaults for every request, per docs/code-execution-security.md section 4. The operator
+# values above are the *relaxed* case, reached only by a request verified against
+# INTERNAL_API_SECRET — so no caller can obtain looser limits by presenting a weaker
+# credential, or none at all.
+SANDBOX_MAX_ROWS = 25_000
+SANDBOX_MAX_BYTES_BILLED = 50 * 1024**3
+# aggregate across every BigQuery job of one execution (`jti`) — /query plus the service's own
+# scans on /schema, /stats and /tables/{t}/sample, none of which is cached at the HTTP layer;
+# the per-query cap alone bounds one query against a caller that has 120 seconds in which to loop
+SANDBOX_AGGREGATE_BYTES_BUDGET = 200 * 1024**3
+# bound on the counter itself, so a flood of distinct `jti`s cannot grow it without limit
+_JTI_BUDGET_LRU_SIZE = 1024
+
 bq_client = bigquery.Client(project=PROJECT_ID)
 
 
-def _internal_job_config() -> bigquery.QueryJobConfig:
-    """Cost cap for the service's own queries (/schema, /stats, /tables/{t}/sample).
+@dataclass(frozen=True)
+class _Caps:
+    """Resolved per-credential limits for one request."""
 
-    Only /query used to carry maximum_bytes_billed, so the endpoints that scan whole
-    views on a cache miss were uncapped and could be driven in a loop.
+    max_rows: int
+    max_bytes_billed: int
+    # set only for a sandbox execution — the key of the aggregate budget below
+    jti: str | None
+
+
+_RELAXED_CAPS = _Caps(MAX_ROWS, MAX_BYTES_BILLED, None)
+
+
+def _caps_for(request: Request | None) -> _Caps:
+    """The limits this request runs under, keyed on the principal `require_auth` resolved.
+
+    Tight by default. Relaxed only for `_INTERNAL_PRINCIPAL`, i.e. a successful
+    `hmac.compare_digest` against `INTERNAL_API_SECRET` — db-api has no other caller and no
+    other auth path. `None` (the fail-open branch when the secret is unset) stays tight: a
+    deployment that has not wired the secret keeps serving, but at sandbox limits rather than
+    at the operator's.
+
+    That is a behaviour change for an unwired deployment. The three internal query paths —
+    `/schema`'s distinct-value scans, `/stats`, and `/tables/{t}/sample` — used to run under
+    the deleted `_internal_job_config()` at `MAX_BYTES_BILLED`; with the secret unset they now
+    run at `SANDBOX_MAX_BYTES_BILLED` (50 GB). Production is unaffected, since the secret is a
+    required `secretKeyRef` in `k8s/deployments/db-api.yaml`, but local dev and an unwired
+    cluster get the tighter ceiling, and raising `MAX_BYTES_BILLED` there will not make
+    `/schema` benefit.
     """
-    return bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_BILLED)
+    principal = getattr(request.state, "principal", None) if request is not None else None
+    if principal == _INTERNAL_PRINCIPAL:
+        return _RELAXED_CAPS
+    jti = principal.execution_id if isinstance(principal, sandbox_auth.SandboxPrincipal) else None
+    return _Caps(SANDBOX_MAX_ROWS, SANDBOX_MAX_BYTES_BILLED, jti)
+
+
+# in-process, bounded LRU: {jti -> bytes *processed* so far}. Processed, not billed: a dry run
+# reports only `total_bytes_processed` (`total_bytes_billed` is 0 on a dry-run job), so it is the
+# only figure available on both sides of the pre-flight charge and its reconcile — charging one
+# unit and reconciling in the other would make the correction wrong by construction. The two
+# differ only by BigQuery's 10 MB minimum and its round-up, immaterial against a 200 GB budget.
+_jti_bytes: "OrderedDict[str, int]" = OrderedDict()
+_jti_bytes_lock = threading.Lock()
+
+
+def _charge_aggregate(jti: str, additional: int) -> tuple[bool, int]:
+    """Charge `additional` bytes to `jti`'s running total.
+
+    Returns `(allowed, total)`. When the charge would exceed the budget nothing is charged
+    and `allowed` is False — the caller must turn that into a 429, never a truncated result.
+    """
+    with _jti_bytes_lock:
+        current = _jti_bytes.get(jti, 0)
+        allowed = current + additional <= SANDBOX_AGGREGATE_BYTES_BUDGET
+        _jti_bytes[jti] = current + additional if allowed else current
+        _jti_bytes.move_to_end(jti)
+        # trimmed on both branches: the reject path also inserts (a 0-valued entry for a `jti`
+        # that never spent anything), so trimming only when allowed leaves the bound unreal
+        while len(_jti_bytes) > _JTI_BUDGET_LRU_SIZE:
+            _jti_bytes.popitem(last=False)
+        return allowed, _jti_bytes.get(jti, current)
+
+
+def _charge_aggregate_spent(jti: str, spent: int) -> None:
+    """Add bytes a job has *already* billed to `jti`'s running total.
+
+    Unconditional, unlike `_charge_aggregate`: the bytes are gone either way, so refusing the
+    charge would only lose the accounting. Used by the paths that have no dry run to price the
+    statement with (see `_run_internal_query`).
+    """
+    if spent <= 0:
+        return
+    with _jti_bytes_lock:
+        _jti_bytes[jti] = _jti_bytes.get(jti, 0) + spent
+        _jti_bytes.move_to_end(jti)
+        while len(_jti_bytes) > _JTI_BUDGET_LRU_SIZE:
+            _jti_bytes.popitem(last=False)
+
+
+def _aggregate_spent(jti: str) -> int:
+    with _jti_bytes_lock:
+        return _jti_bytes.get(jti, 0)
+
+
+def _reconcile_aggregate(jti: str, delta: int) -> None:
+    """Correct a charge after the fact: the pre-flight charge uses the dry run's estimate, and the
+    executed job can process less (a cache hit) or more than that estimate. A negative `delta`
+    equal to the whole estimate is the refund for a query that raised before it ran."""
+    if delta == 0:
+        return
+    with _jti_bytes_lock:
+        if jti in _jti_bytes:
+            _jti_bytes[jti] = max(0, _jti_bytes[jti] + delta)
+
+
+def _aggregate_budget_exceeded(jti: str, requested: int, spent: int) -> HTTPException:
+    logger.warning({
+        "message": "sandbox aggregate byte budget exceeded",
+        "log_type": "endpoint_access",
+        "jti": jti,
+        "bytes_spent": spent,
+        "bytes_requested": requested,
+        "budget": SANDBOX_AGGREGATE_BYTES_BUDGET,
+    })
+    return HTTPException(
+        status_code=429,
+        detail=(
+            f"Aggregate BigQuery byte budget for this execution exhausted: "
+            f"{spent} of {SANDBOX_AGGREGATE_BYTES_BUDGET} bytes already processed, this query "
+            f"needs a further {requested}. Narrow the query or aggregate in fewer scans."
+        ),
+    )
+
+
+def _run_internal_query(sql: str, caps: _Caps) -> "bigquery.QueryJob":
+    """Run one of the service's own queries (/schema, /stats, /tables/{t}/sample) under `caps`.
+
+    Only /query used to carry `maximum_bytes_billed` and only /query charged the aggregate
+    budget, so the endpoints that scan whole views on a cache miss were both uncapped and free
+    — and none of them is cached at the HTTP layer, so a script could loop them for its whole
+    wall clock outside the budget the constant claims to be an aggregate over every query of
+    one execution.
+
+    These paths have no dry run to price the statement with, so the budget is checked before
+    the job starts and the bytes it processed are charged after it finishes. Post-hoc charging
+    means the budget can be overshot by at most one query — and by at most that query's
+    `maximum_bytes_billed`, which is exactly what the per-query cap bounds.
+
+    `caps` is the *triggering* caller's, including on the shared `_get_categorical_values`
+    cache: a per-credential ceiling there decides only who pays and how much this job may
+    bill, never what a later caller finds cached. A job over the triggering caller's ceiling
+    fails and leaves the cache unpopulated, so the next caller simply retries under its own.
+    """
+    if caps.jti is not None:
+        spent = _aggregate_spent(caps.jti)
+        if spent >= SANDBOX_AGGREGATE_BYTES_BUDGET:
+            raise _aggregate_budget_exceeded(caps.jti, 0, spent)
+
+    job = bq_client.query(
+        sql, job_config=bigquery.QueryJobConfig(maximum_bytes_billed=caps.max_bytes_billed)
+    )
+    job.result()
+    if caps.jti is not None:
+        _charge_aggregate_spent(caps.jti, job.total_bytes_processed or 0)
+    return job
 
 # expose views (not underlying tables) so AI agents use the enriched schemas
 VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "asm_qtl_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "mpra_v", "variant_annotation_v", "peak_to_gene_v", "hla_associations_v", "phenotypes_v", "datasets_v"]
@@ -280,12 +435,16 @@ _DERIVED_COLUMN_MODES = {
 }
 
 
-def _get_categorical_values(view_name: str) -> dict[str, Any]:
+def _get_categorical_values(view_name: str, caps: _Caps) -> dict[str, Any]:
     """Return distinct values for a view's categorical columns.
 
     Result keys are either the column name (flat list of allowed values) or
     `<col>_by_<dep>` (mapping from dependency value to allowed values). Cached
     in-process for `_VALUES_CACHE_TTL_SECONDS` to keep `/schema` cheap.
+
+    On a cache miss the full-column scans below run under the *triggering* caller's `caps`
+    and are charged to it — see `_run_internal_query` for why that does not let one caller's
+    ceiling decide what a later caller finds cached.
     """
     config = _CATEGORICAL_COLUMNS.get(view_name)
     if not config:
@@ -306,9 +465,11 @@ def _get_categorical_values(view_name: str) -> dict[str, Any]:
         agg = ", ".join(f"ARRAY_AGG(DISTINCT {c} IGNORE NULLS) AS {c}" for c in flat_cols)
         sql = f"SELECT {agg} FROM {fq}"
         try:
-            row = next(iter(bq_client.query(sql, job_config=_internal_job_config()).result()))
+            row = next(iter(_run_internal_query(sql, caps).result()))
             for c in flat_cols:
                 result[c] = sorted(row[c] or [])
+        except HTTPException:
+            raise  # an exhausted aggregate budget is the caller's answer, not a warning
         except Exception as e:
             logger.warning(f"Distinct value fetch failed for {view_name}: {e}")
 
@@ -320,10 +481,12 @@ def _get_categorical_values(view_name: str) -> dict[str, Any]:
         agg = ", ".join(f"ARRAY_AGG(DISTINCT {c} IGNORE NULLS) AS {c}" for c in cols)
         sql = f"SELECT {dep}, {agg} FROM {fq} WHERE {dep} IS NOT NULL GROUP BY {dep}"
         try:
-            for row in bq_client.query(sql, job_config=_internal_job_config()).result():
+            for row in _run_internal_query(sql, caps).result():
                 key = row[dep]
                 for c in cols:
                     result.setdefault(f"{c}_by_{dep}", {})[key] = sorted(row[c] or [])
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning(f"Grouped distinct value fetch failed for {view_name}.{dep}: {e}")
 
@@ -499,9 +662,10 @@ async def health_check():
 
 
 @app.get("/schema", response_model=SchemaResponse)
-async def get_schema(table: str | None = None):
+async def get_schema(http_request: Request, table: str | None = None):
     """Get database schema information. Optionally filter to a single table."""
     start_time = time.perf_counter()
+    caps = _caps_for(http_request)
     if table and table not in VIEWS:
         resolved = _BASE_TABLES.get(table)
         if resolved:
@@ -518,7 +682,7 @@ async def get_schema(table: str | None = None):
         try:
             table_meta = bq_client.get_table(table_ref)
             overrides = _COLUMN_DESCRIPTIONS.get(table_name, {})
-            raw_cat_values = _get_categorical_values(table_name)
+            raw_cat_values = _get_categorical_values(table_name, caps)
             cat_values = _compact_categorical_values(raw_cat_values)
 
             # get row count and column modes from the base table: views report
@@ -598,15 +762,22 @@ async def get_schema(table: str | None = None):
 
 
 @app.post("/query", response_model=QueryResponse)
-async def execute_query(request: QueryRequest):
+async def execute_query(request: QueryRequest, http_request: Request):
     """Execute a SQL query against the genetics database."""
     start_time = time.perf_counter()
     sql = request.sql
 
     sql = _qualify_tables(sql)
 
+    # `QueryRequest.max_rows` carries a class-level `le=MAX_ROWS`, evaluated once at model
+    # definition time and therefore identical for every caller; the per-credential cap has to
+    # be applied here, after the principal is known. Tightening MAX_ROWS itself would move
+    # that class-level bound and so cap the relaxed callers too.
+    caps = _caps_for(http_request)
+    max_rows = min(request.max_rows, caps.max_rows)
+
     job_config = bigquery.QueryJobConfig(
-        maximum_bytes_billed=MAX_BYTES_BILLED,
+        maximum_bytes_billed=caps.max_bytes_billed,
         dry_run=request.dry_run,
     )
 
@@ -614,6 +785,16 @@ async def execute_query(request: QueryRequest):
     # that is not a plain SELECT over the exposed views is rejected before it can run
     probe = authorize_query(sql, job_config)
 
+    # the dry run already priced the statement, so the aggregate budget is checked *before*
+    # the bytes are spent rather than after — over budget is a 429, never a truncated result
+    estimated_bytes = probe.total_bytes_processed or 0
+    charged = caps.jti is not None and not request.dry_run
+    if charged:
+        allowed, spent = _charge_aggregate(caps.jti, estimated_bytes)
+        if not allowed:
+            raise _aggregate_budget_exceeded(caps.jti, estimated_bytes, spent)
+
+    settled = False
     try:
         if request.dry_run:
             bytes_processed = probe.total_bytes_processed
@@ -641,11 +822,14 @@ async def execute_query(request: QueryRequest):
         columns = [field.name for field in results.schema]
 
         for i, row in enumerate(results):
-            if i >= request.max_rows:
+            if i >= max_rows:
                 break
             rows.append([_serialize_value(v) for v in row.values()])
 
         bytes_processed = query_job.total_bytes_processed
+        if charged:
+            _reconcile_aggregate(caps.jti, (bytes_processed or 0) - estimated_bytes)
+            settled = True
         total_rows = results.total_rows
         logger.info({
             "message": "query",
@@ -663,7 +847,7 @@ async def execute_query(request: QueryRequest):
             rows=rows,
             total_rows=total_rows,
             bytes_processed=bytes_processed,
-            truncated=total_rows > request.max_rows,
+            truncated=total_rows > max_rows,
         )
 
     except BadRequest as e:
@@ -673,6 +857,12 @@ async def execute_query(request: QueryRequest):
     except Exception as e:
         logger.exception("Query execution failed")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # a job that never ran bills nothing, so a query that raises between the pre-flight
+        # charge and the reconcile must give the estimate back — otherwise a script's syntax
+        # errors, each priced by the dry run, eat the execution's budget without spending a byte
+        if charged and not settled:
+            _reconcile_aggregate(caps.jti, -estimated_bytes)
 
 
 def _serialize_value(value: Any) -> Any:
@@ -685,7 +875,7 @@ def _serialize_value(value: Any) -> Any:
 
 
 @app.get("/tables/{table_name}/sample")
-async def get_sample(table_name: str, limit: int = 10):
+async def get_sample(table_name: str, http_request: Request, limit: int = 10):
     """Get sample rows from a table."""
     start_time = time.perf_counter()
     # accept both view names and base table names
@@ -696,8 +886,7 @@ async def get_sample(table_name: str, limit: int = 10):
     limit = min(limit, 100)
     sql = f"SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.{resolved}` LIMIT {limit}"
 
-    query_job = bq_client.query(sql, job_config=_internal_job_config())
-    results = query_job.result()
+    results = _run_internal_query(sql, _caps_for(http_request)).result()
 
     columns = [field.name for field in results.schema]
     rows = [[_serialize_value(v) for v in row.values()] for row in results]
@@ -713,7 +902,7 @@ async def get_sample(table_name: str, limit: int = 10):
 
 
 @app.get("/stats")
-async def get_stats():
+async def get_stats(http_request: Request):
     """Get summary statistics for the database."""
     start_time = time.perf_counter()
     stats = {}
@@ -740,11 +929,13 @@ async def get_stats():
         GROUP BY dataset, data_type
         ORDER BY count DESC
         """
-        results = bq_client.query(sql, job_config=_internal_job_config()).result()
+        results = _run_internal_query(sql, _caps_for(http_request)).result()
         stats["credible_sets_by_source"] = [
             {"dataset": row.dataset, "data_type": row.data_type, "count": row.count}
             for row in results
         ]
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"Could not get credible sets breakdown: {e}")
 
