@@ -363,7 +363,7 @@ Classical HLA allele associations from FinnGen R14: every imputed HLA allele tes
 
 **Why the table exists.** results-api serves the same data from per-phenotype tabix files, which answers "all alleles for a trait". The reverse — "all traits for an allele", the PheWAS view that makes MHC pleiotropy visible — spans all 2,712 files and is only answerable here. Clustering is `phenotype, gene, allele` to serve both directions.
 
-Two columns need care when querying. `pval` **underflows to 0** for the strongest signals (coeliac `DQB1*02:01` is mlogp 1596), so rank and threshold on `mlogp`. `info` is the allele's imputation quality (constant per allele across phenotypes) and filtering on it is not optional in practice: rare alleles imputed below ~0.5 produce enormous unstable betas that read as spectacular associations but are artifacts.
+Two columns need care when querying. `pval` **underflows to 0** for the strongest signals (coeliac `DQB1*02:01` is mlogp 1596), so rank and threshold on `mlogp` (`mlog10p` when querying the view — see the rename below). `info` is the allele's imputation quality (constant per allele across phenotypes) and filtering on it is not optional in practice: rare alleles imputed below ~0.5 produce enormous unstable betas that read as spectacular associations but are artifacts.
 
 The table is unpartitioned — every row is chr 6, so a `RANGE_BUCKET(chr, …)` partition would put the whole table in one partition anyway. `dataset` is constant and injected at load time.
 
@@ -385,6 +385,20 @@ The table is unpartitioned — every row is chr 6, so a `RANGE_BUCKET(chr, …)`
 | dataset | STRING | Yes | Source dataset (constant `finngen_hla`) |
 
 The `hla_associations_v` view maps `dataset` to `resource = 'finngen'` explicitly rather than via the lowercase fallback the other product views use, since that would yield `finngen_hla` — these results belong to the same resource as the FinnGen GWAS they were run alongside.
+
+It also **renames the statistic columns** to the suite's house spelling, which is what every consumer sees and what the column tables in `../genetics-results-suite/configs/datasets.yaml` document:
+
+| table column | view column |
+|---|---|
+| mlogp | mlog10p |
+| sebeta | se |
+| af_alt | af |
+| af_alt_cases | af_cases |
+| af_alt_controls | af_controls |
+
+The values are unchanged — the rename exists because results-api serves the same quantities from the per-phenotype tabix files under `mlog10p`/`se`/`af`/`af_cases`/`af_controls`, and the SDK's `hla()` returns results from both stores (`genetics-results-suite-5wm`). The table keeps FinnGen's native spelling so the loader stays a straight copy of the staged file. Because of the rename the view lists its columns explicitly instead of `SELECT *`: a new column on `hla_associations` must be named in the view too, or it will not surface.
+
+Replacing this view is not covered by the suite's `deploy.sh` — it is applied by `scripts/setup_bigquery.sh` — and it is not compatible with the previously deployed mcp-server. See "HLA column rename rollout" in `../genetics-results-suite/docs/project-spec.md` for the ordering.
 
 ### peak_to_gene
 
