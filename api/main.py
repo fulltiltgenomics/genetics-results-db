@@ -131,8 +131,10 @@ def require_auth(request: Request) -> None:
 
     if not INTERNAL_API_SECRET:
         return
+    # compare as bytes: compare_digest on str raises TypeError for non-ASCII, which would
+    # surface as a 500 instead of failing closed with a 401
     if not auth_header.startswith("Bearer ") or not hmac.compare_digest(
-        token, INTERNAL_API_SECRET
+        token.encode("utf-8"), INTERNAL_API_SECRET.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
     request.state.principal = _INTERNAL_PRINCIPAL

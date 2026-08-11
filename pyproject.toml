@@ -10,7 +10,16 @@ dependencies = [
     "uvicorn[standard]>=0.43.0",
     "google-cloud-bigquery>=3.41.0",
     "pydantic>=2.12.5",
-    "PyJWT>=2.10",
+    # exact, like the siblings pin it (genetics-mcp-server 2.11.0, genetics-results-api
+    # 2.12.1): this is the dependency that validates sandbox tokens, and the previous
+    # `>=2.10` left it free to drift on a rebuild. The 2.10 floor still matters — that is
+    # where a *future* `iat` became ImmatureSignatureError, i.e. where post-dating a token
+    # stopped being possible, which is why sandbox_auth.LEEWAY_SECONDS exists to absorb
+    # minter/verifier clock skew — so never move this below it. Anti-backdating is a
+    # separate property and does not come from here: PyJWT accepts an arbitrarily old `iat`
+    # as long as `exp` is in the future, and sandbox_auth's own MAX_TOKEN_AGE_SECONDS check
+    # is what enforces it, at every version.
+    "PyJWT==2.13.0",
     "pyyaml>=6.0",
     "polars>=1.37.0",
     "gcsfs>=2026.4.0",

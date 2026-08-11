@@ -607,7 +607,7 @@ BigQuery cost is estimated at $6.25 per TiB (on-demand pricing). Noisy loggers (
 
 #### Authentication
 
-Every endpoint except `/health` requires `Authorization: Bearer $INTERNAL_API_SECRET` — the same shared secret chat-backend and mcp-server already send on every call, so no client change was needed. The comparison is constant-time (`hmac.compare_digest`).
+Every endpoint except `/health` requires `Authorization: Bearer $INTERNAL_API_SECRET` — the same shared secret chat-backend and mcp-server already send on every call, so no client change was needed. The comparison is constant-time (`hmac.compare_digest`) and runs on the UTF-8 **bytes** of both sides: `compare_digest` raises `TypeError` when handed a `str` containing non-ASCII, which turned a bad credential into a 500 instead of a 401 (`genetics-results-suite-zyi`). The sandbox branch does not shield this — it declines a non-ASCII bearer as not `alg: HS256`-shaped, which is precisely what lets it reach the comparison.
 
 `/health` is exempt because kubelet probes and the monitor CronJob poll it without credentials. FastAPI mounts `/docs`, `/redoc` and `/openapi.json` with `add_route`, which bypasses app-level dependencies, so those three are re-declared as ordinary routes and are authenticated too.
 

@@ -59,3 +59,22 @@ def test_query_passes_authentication_with_secret(client, auth):
     """Authorization must not be what stops the request; BigQuery may still reject the SQL."""
     resp = client.post("/query", json={"sql": "SELECT 1"}, headers=auth)
     assert resp.status_code != 401
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["sécret", "пароль", "test-internal-secret​"],
+    ids=["latin-1", "cyrillic", "zero-width-suffix"],
+)
+def test_non_ascii_bearer_is_401_not_500(client, token):
+    """`hmac.compare_digest` raises TypeError when either side is a str with non-ASCII, so
+    comparing the raw bearer would turn a bad credential into a 500. None of these are
+    sandbox-shaped, so the sandbox branch declines them and they reach the comparison.
+
+    Sent as raw bytes because that is what a header is on the wire — httpx refuses to encode
+    a non-ASCII str, while starlette latin-1-decodes the bytes back into a non-ASCII str, so
+    a client that is not httpx can reach this and a test that is must go around it.
+    """
+    header = {"Authorization": f"Bearer {token}".encode("utf-8")}
+    resp = client.post("/query", json={"sql": "SELECT 1"}, headers=header)
+    assert resp.status_code == 401
