@@ -57,6 +57,13 @@ uv pip install -e '.[dev]'
 pytest tests/
 ```
 
+`api` is a **namespace package** reached through `sys.path`, not an installed one, and
+namespace packages merge every matching directory on `sys.path`. A `PYTHONPATH` pointing at
+another checkout of this repo would therefore add that tree's `api/` to `api.__path__` and
+let tests import source from it. `tests/conftest.py` aborts the run in `pytest_configure`
+when any `api.__path__` entry falls outside the pytest rootdir
+(genetics-results-suite-6o3); it is silent otherwise.
+
 ## Run the REST API server
 
 Requires Google Cloud credentials configured.
