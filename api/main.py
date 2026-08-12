@@ -73,6 +73,17 @@ for _name in ("uvicorn.access", "google", "urllib3", "asyncio"):
 
 INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 
+# the service discriminator in the shared endpoint_access sink, where db-api's rows sit beside
+# results-api's. Constant and not env-derived on purpose: every previous candidate for this job
+# was something that moves. `endpoint_path IS NULL` worked only while db-api emitted no path, and
+# LOG_SOURCE below is derived from the environment, carries no service name and has already been
+# renamed once in production (genetics-results-api-prod -> finngenie_prod). A discriminator that
+# can be renamed by a deploy is not a discriminator; this one can only change by editing this line.
+SERVICE = "db-api"
+
+# which *environment* wrote the row — deliberately a separate axis from SERVICE above
+LOG_SOURCE = os.environ.get("LOG_SOURCE", "genetics_db_api_prod")
+
 # kubelet probes and the monitor CronJob poll /health with no credentials
 _UNAUTHENTICATED_PATHS = {"/health"}
 
@@ -113,7 +124,10 @@ def require_auth(request: Request) -> None:
             logger.warning({
                 "message": "sandbox token rejected",
                 "log_type": "endpoint_access",
-                "path": request.url.path,
+                "service": SERVICE,
+                "log_source": LOG_SOURCE,
+                "endpoint_path": request.url.path,
+                "http_method": request.method,
                 "reason": str(exc),
             })
             raise HTTPException(status_code=401, detail="Unauthorized") from None
@@ -121,7 +135,10 @@ def require_auth(request: Request) -> None:
         logger.info({
             "message": "sandbox request authorized",
             "log_type": "endpoint_access",
-            "path": request.url.path,
+            "service": SERVICE,
+            "log_source": LOG_SOURCE,
+            "endpoint_path": request.url.path,
+            "http_method": request.method,
             "principal": "sandbox",
             "sub": principal.user,
             "sid": principal.session_id,
@@ -138,6 +155,34 @@ def require_auth(request: Request) -> None:
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
     request.state.principal = _INTERNAL_PRINCIPAL
+
+
+def _access_log_fields(
+    request: Request | None, endpoint_path: str, http_method: str
+) -> dict[str, Any]:
+    """The fields every db-api `endpoint_access` line shares with results-api's.
+
+    There is deliberately no `user_email`: db-api sits behind results-api and the internal
+    secret rather than in front of users, so its caller is a *service*, not a person. The only
+    principal that exists here is the credential that authorized the call, which is what
+    `principal` records — inventing a user_email would misrepresent it.
+    """
+    principal = getattr(request.state, "principal", None) if request is not None else None
+    if isinstance(principal, sandbox_auth.SandboxPrincipal):
+        principal_name = "sandbox"
+    elif principal == _INTERNAL_PRINCIPAL:
+        principal_name = _INTERNAL_PRINCIPAL
+    else:
+        # the fail-open branch: INTERNAL_API_SECRET unset, so nothing was verified
+        principal_name = "unauthenticated"
+    return {
+        "log_type": "endpoint_access",
+        "service": SERVICE,
+        "log_source": LOG_SOURCE,
+        "endpoint_path": endpoint_path,
+        "http_method": http_method,
+        "principal": principal_name,
+    }
 
 
 if not INTERNAL_API_SECRET:
@@ -743,7 +788,7 @@ async def get_schema(http_request: Request, table: str | None = None):
 
     logger.info({
         "message": "schema",
-        "log_type": "endpoint_access",
+        **_access_log_fields(http_request, "/schema", "GET"),
         "table": table or "all",
         "tables_returned": len(tables),
         "warnings": len(warnings),
@@ -802,7 +847,7 @@ async def execute_query(request: QueryRequest, http_request: Request):
             bytes_processed = probe.total_bytes_processed
             logger.info({
                 "message": "query",
-                "log_type": "endpoint_access",
+                **_access_log_fields(http_request, "/query", "POST"),
                 "sql": request.sql,
                 "dry_run": True,
                 "total_rows": 0,
@@ -835,7 +880,7 @@ async def execute_query(request: QueryRequest, http_request: Request):
         total_rows = results.total_rows
         logger.info({
             "message": "query",
-            "log_type": "endpoint_access",
+            **_access_log_fields(http_request, "/query", "POST"),
             "sql": request.sql,
             "dry_run": False,
             "total_rows": total_rows,
@@ -895,7 +940,7 @@ async def get_sample(table_name: str, http_request: Request, limit: int = 10):
 
     logger.info({
         "message": "sample",
-        "log_type": "endpoint_access",
+        **_access_log_fields(http_request, "/tables/{table_name}/sample", "GET"),
         "table": resolved,
         "rows_returned": len(rows),
         "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
@@ -943,7 +988,7 @@ async def get_stats(http_request: Request):
 
     logger.info({
         "message": "stats",
-        "log_type": "endpoint_access",
+        **_access_log_fields(http_request, "/stats", "GET"),
         "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
     })
     return stats

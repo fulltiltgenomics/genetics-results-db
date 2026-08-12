@@ -598,8 +598,38 @@ Structured JSON logging to stdout, compatible with GCP Cloud Logging. Each endpo
 
 - `message`: endpoint name (query, schema, sample, stats)
 - `log_type`: "endpoint_access"
+- `service`: the constant `"db-api"` — the **service discriminator** in the shared sink (see below)
+- `log_source`: `LOG_SOURCE`, default `genetics_db_api_prod` — which *environment* wrote the row, not which service
+- `endpoint_path`: the route template (`/query`, `/schema`, `/tables/{table_name}/sample`, `/stats`)
+- `http_method`
+- `principal`: which credential authorized the call — `internal` (the shared secret), `sandbox` (a validated execution token), or `unauthenticated` (the fail-open branch, `INTERNAL_API_SECRET` unset)
 - `duration_ms`: request duration in milliseconds
 - Endpoint-specific fields: `sql`, `dry_run`, `total_rows`, `rows_returned`, `bytes_processed`, `estimated_cost_usd` (for `/query`); `table`, `tables_returned` (for `/schema`); `table`, `rows_returned` (for `/sample`)
+
+**No `user_email`, deliberately.** db-api sits behind results-api and the internal secret rather
+than in front of users, so its caller is a *service*, not a person; `principal` names the
+credential, which is the only principal that exists here. Do not read the absence as "the user
+was not resolved" — there is no user to resolve.
+
+**Why `service` exists, and why it is not `log_source`.** db-api's rows land in
+`phewas-development.genetics_api_logs.stdout` together with results-api's, because a Cloud
+Logging → BigQuery sink names its table after the log ID (`stdout`), not after the service.
+Something in the payload therefore has to say which service wrote the row, and the two things
+that previously did the job both move:
+
+- `endpoint_path IS NULL` identified db-api only while db-api emitted no path — the *absence* of
+  a field, which stopped meaning "db-api" the moment db-api started emitting `endpoint_path`.
+- `log_source` is derived from the environment, carries no service name, is asymmetric between
+  the two services (`genetics_db_api_prod` vs results-api's `finngenie_prod`), and has already
+  been renamed once in production (`genetics-results-api-prod` → `finngenie_prod`, 2026-06-03).
+  A query keyed on a renamed value returns **nothing and no error**.
+
+`service` is a module constant (`api/main.py`, `SERVICE = "db-api"`), not read from the
+environment, so only an edit to that line can move it. `log_source` is kept as the *environment*
+axis. The sink's BigQuery schema auto-evolves, so `service` gets its own column on the first row
+written after this ships — no migration. Rows written **before** it do not have one; see
+`genetics-results-suite/docs/project-spec.md` → "Log sinks" for the three eras a historical query
+has to span.
 
 BigQuery cost is estimated at $6.25 per TiB (on-demand pricing). Noisy loggers (uvicorn.access, google, urllib3, asyncio) are suppressed to WARNING level.
 
