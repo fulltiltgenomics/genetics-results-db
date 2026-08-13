@@ -22,8 +22,14 @@ os.environ.setdefault("PROJECT_ID", "test-project")
 
 @pytest.fixture(scope="module")
 def main():
-    """Imported lazily: api.main reads INTERNAL_API_SECRET at module scope, so importing it at
-    collection time would fix the secret before test_api_auth's fixture sets it."""
+    """Imported in a fixture rather than at module scope.
+
+    This was a workaround: api.main used to read INTERNAL_API_SECRET at module scope, so
+    importing it at collection time froze the secret before test_api_auth's fixture set it.
+    `genetics-results-suite-xi6` removed the hazard — the secret is read per request now, and
+    test_secret_read_timing.py pins that — so a module-scope import here would be safe. Kept
+    as is because nothing here needs it earlier, not because it is still load-bearing.
+    """
     from api import main as main_module
 
     return main_module

@@ -30,4 +30,11 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",
+    # shuffles test order every run. Declared (genetics-results-suite-xi6) so the shuffling is
+    # part of the documented `uv pip install -e '.[dev]'` flow rather than an accident of which
+    # interpreter you happen to run pytest with: it was present in the global pyenv but NOT in
+    # this project's .venv, so the seed that turned nine auth tests red — a real order
+    # dependence in api.main, since fixed — was only reachable outside the declared setup.
+    # `-p no:randomly` restores a fixed order when bisecting.
+    "pytest-randomly>=4.0",
 ]

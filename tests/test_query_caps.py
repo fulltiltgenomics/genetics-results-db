@@ -87,11 +87,13 @@ class FakeBQ:
 
 @pytest.fixture(scope="module")
 def main():
-    module = _reload(INTERNAL_API_SECRET=SECRET, SANDBOX_TOKEN_SIGNING_KEY=SIGNING_KEY)
+    mp = pytest.MonkeyPatch()
+    module = _reload(mp, INTERNAL_API_SECRET=SECRET, SANDBOX_TOKEN_SIGNING_KEY=SIGNING_KEY)
     module.MAX_ROWS = 100_000
     module.MAX_BYTES_BILLED = 100 * GB
     module._RELAXED_CAPS = module._Caps(100_000, 100 * GB, None)
-    return module
+    yield module
+    mp.undo()
 
 
 @pytest.fixture
@@ -146,7 +148,7 @@ def test_sandbox_asking_for_fewer_rows_than_the_cap_still_gets_what_it_asked_for
 def test_no_credential_on_a_fail_open_deployment_gets_the_tight_limits(monkeypatch):
     """db-api's fail-open branch (INTERNAL_API_SECRET unset) leaves principal None. That is a
     weaker credential than the shared secret and must not buy looser limits."""
-    module = _reload(SANDBOX_TOKEN_SIGNING_KEY=SIGNING_KEY)
+    module = _reload(monkeypatch, SANDBOX_TOKEN_SIGNING_KEY=SIGNING_KEY)
     fake = FakeBQ(total_rows=60_000)
     monkeypatch.setattr(module, "bq_client", fake)
 

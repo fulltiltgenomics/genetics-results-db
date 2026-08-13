@@ -113,10 +113,16 @@ def test_which_wire_bytes_authenticate_a_non_ascii_secret(client, monkeypatch):
     refuses to send either. `_require_ascii_secret` refuses a non-ASCII secret at startup, so
     this map is unreachable in a real deployment; the comparison is still reachable, so it is
     pinned here rather than through the app.
+
+    Injected by standing in for the accessor rather than by setting the environment: since
+    genetics-results-suite-xi6 `require_auth` reads through `_internal_api_secret`, which
+    validates what it returns, so a non-ASCII value can no longer reach the comparison via the
+    environment — that is the property the test below pins. Replacing the accessor puts the
+    codec pairing under test without weakening it.
     """
     import api.main as main
 
-    monkeypatch.setattr(main, "INTERNAL_API_SECRET", "sécret")
+    monkeypatch.setattr(main, "_internal_api_secret", lambda: "sécret")
     # utf-8 on the wire (aiohttp-shaped): authenticates now, 401 before ctq
     main.require_auth(_request_with_raw_bearer(b"Bearer s\xc3\xa9cret"))
     # latin-1 on the wire (node/undici- and requests-shaped): 401 now, authenticated before ctq
@@ -125,12 +131,36 @@ def test_which_wire_bytes_authenticate_a_non_ascii_secret(client, monkeypatch):
     assert exc.value.status_code == 401
 
 
-def test_the_ascii_guard_fires_only_on_a_non_ascii_secret(client):
-    """genetics-results-suite-ctq: the invariant require_auth relies on is enforced at startup,
-    not merely documented. Absent and empty are the dev/test configuration and stay silent."""
+def test_the_ascii_guard_fires_only_on_a_non_ascii_secret(client, monkeypatch):
+    """genetics-results-suite-ctq: the invariant require_auth relies on is enforced, not merely
+    documented. Absent and empty are the dev/test configuration and stay silent.
+
+    Since genetics-results-suite-xi6 the secret is read per request, so the invariant has to
+    hold at REQUEST time too: validating only the import-time snapshot would leave `require_auth`
+    comparing against bytes nothing ever checked. `_internal_api_secret` is the only way to
+    obtain the value, and it refuses a non-ASCII one — asserted here on the accessor, so the
+    property survives however the reading is arranged.
+
+    The two times behave differently ON PURPOSE, and the difference is the whole failure mode:
+      * at import `_require_ascii_secret` RAISES, so the pod never passes readiness and the
+        rollout stalls with the old pods still serving (genetics-results-suite-ctq);
+      * at request time the accessor FAILS CLOSED (401) and must never raise. A RuntimeError out
+        of a FastAPI dependency is a 500 for every call, including the one holding the correct
+        credential, on a pod that stays Ready because `/health` returns before the read. A
+        non-ASCII value can only get there by an in-process mutation, which no deployment does.
+    """
     import api.main as main
 
     with pytest.raises(RuntimeError, match="INTERNAL_API_SECRET"):
         main._require_ascii_secret("sécret")
     main._require_ascii_secret(SECRET)
     main._require_ascii_secret("")
+
+    monkeypatch.setenv("INTERNAL_API_SECRET", "sécret")
+    assert main._internal_api_secret() is None  # refuse, do not raise
+    resp = client.get("/openapi.json", headers={"Authorization": f"Bearer {SECRET}"})
+    assert resp.status_code == 401  # not 500, and not admitted
+
+    monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
+    assert main._internal_api_secret() == SECRET
+    assert client.get("/openapi.json", headers={"Authorization": f"Bearer {SECRET}"}).status_code == 200

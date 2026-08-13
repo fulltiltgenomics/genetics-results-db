@@ -71,7 +71,6 @@ logger = logging.getLogger(__name__)
 for _name in ("uvicorn.access", "google", "urllib3", "asyncio"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
-INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 
 # the service discriminator in the shared endpoint_access sink, where db-api's rows sit beside
 # results-api's. Constant and not env-derived on purpose: every previous candidate for this job
@@ -146,7 +145,12 @@ def require_auth(request: Request) -> None:
         })
         return
 
-    if not INTERNAL_API_SECRET:
+    secret = _internal_api_secret()
+    if secret is None:
+        # nothing to compare against that this process is willing to trust — refuse rather than
+        # fall through to the fail-open return below. See `_internal_api_secret`.
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not secret:
         return
     # compare as bytes: compare_digest on str raises TypeError for non-ASCII, which would
     # surface as a 500 instead of failing closed with a 401.
@@ -168,7 +172,7 @@ def require_auth(request: Request) -> None:
     # the only str it can see came from starlette's own latin-1 decode and re-encodes by
     # construction. Add the guard if a str-taking entry point is ever introduced here.
     if not auth_header.startswith("Bearer ") or not hmac.compare_digest(
-        token.encode("latin-1"), INTERNAL_API_SECRET.encode("utf-8")
+        token.encode("latin-1"), secret.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
     request.state.principal = _INTERNAL_PRINCIPAL
@@ -228,17 +232,77 @@ def _require_ascii_secret(secret: str) -> None:
         )
 
 
-# at import, like the warning below and require_sandbox_config: this module already reads the
-# variable at import (genetics-results-suite-xi6), and the check adds no new import-time work
-_require_ascii_secret(INTERNAL_API_SECRET)
+# set once this process has observed a usable secret, and never cleared. See the asymmetry
+# note in `_internal_api_secret`, which is the only thing that reads or writes it.
+_authentication_was_configured = False
 
-if not INTERNAL_API_SECRET:
+
+def _internal_api_secret() -> str | None:
+    """The shared secret `require_auth` compares against, read fresh — or None to refuse.
+
+    Returns a non-empty str to authenticate against; `""` when no secret is configured and none
+    ever was in this process, which is the documented fail-open dev shape; and **None when the
+    request must be refused** (401). It never raises: a RuntimeError out of here would leave a
+    FastAPI dependency 500ing *every* call, including one presenting the correct credential, on
+    a pod kubelet keeps Ready because `/health` returns before the read.
+
+    Read per request rather than snapshotted at import (`genetics-results-suite-xi6`). The
+    snapshot was global state fixed by whoever imported this module first: pytest imports every
+    test module at COLLECTION time, before any fixture sets the variable, so which tests ran
+    first decided whether authentication ran at all — at `--randomly-seed=2662673150` the
+    secret froze to "", require_auth took its fail-open branch, and the nine auth tests that
+    assert 401 got 200 and **failed** (a seed-dependent red suite, not a silent green one). The
+    hazard is the order-dependence itself: a shuffled run going red for reasons unrelated to
+    the change under test, and any future module-scope `import api.main` freezing the secret
+    for an unrelated test file.
+
+    Reading and validating in the SAME accessor is the point, not incidental: `_require_ascii_secret`
+    used to validate the import-time snapshot only, so a request-time read past it could compare
+    against a value that was never checked — and ASCII is exactly the invariant that makes the
+    `latin-1` vs `utf-8` pairing in `require_auth` well defined. There is no way to obtain the
+    secret except through here, so the value compared is the value validated.
+    """
+    global _authentication_was_configured
+
+    secret = os.environ.get("INTERNAL_API_SECRET", "")
+
+    if secret and not secret.isascii():
+        # startup already refused this value, so getting here means the variable changed under
+        # a live process — impossible for a pod, whose environ is immutable. Fail closed: see
+        # the "never raises" paragraph above for why this is not `_require_ascii_secret(secret)`
+        return None
+
+    if secret:
+        _authentication_was_configured = True
+        return secret
+
+    # THE ASYMMETRY IS THE POINT — do not "simplify" this to `return secret`.
+    # A runtime change may ENABLE authentication (empty -> set, which is what makes the
+    # collection-order hazard above unreachable) but must never DISABLE it. Under the old module
+    # global no in-process mutation could turn a secret-set app into a fail-open one, because the
+    # app held its own copy; a plain per-request read would hand that away, so that deleting or
+    # emptying the variable admitted every caller with principal=None. Once this process has
+    # observed a secret, an absent one is a fail-CLOSED condition. Pinned by
+    # tests/test_secret_read_timing.py::test_a_configured_process_never_fails_open_afterwards.
+    return None if _authentication_was_configured else ""
+
+
+_startup_secret = os.environ.get("INTERNAL_API_SECRET", "")
+
+# fail fast at import: the environment does not change under a running pod, so this is where a
+# non-ASCII secret crashes the process (readiness never passes, the rollout stalls, the old pods
+# keep serving) rather than at request time, where the accessor above fails closed instead
+_require_ascii_secret(_startup_secret)
+
+_authentication_was_configured = bool(_startup_secret)
+
+if not _startup_secret:
     logger.warning(
         "INTERNAL_API_SECRET is not set: every endpoint is reachable without authentication"
     )
 
 # refuses to start rather than warn when the sandbox is deployed and either secret is missing
-sandbox_auth.require_sandbox_config(INTERNAL_API_SECRET)
+sandbox_auth.require_sandbox_config(_startup_secret)
 
 app = FastAPI(
     title="Genetics Results API",

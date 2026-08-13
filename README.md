@@ -49,8 +49,11 @@ uv venv
 uv pip install -r pyproject.toml
 ```
 
-To run `tests/` as well, install the dev extra (pytest and httpx, which starlette's
-`TestClient` needs) and run pytest from the repo root:
+To run `tests/` as well, install the dev extra and run pytest from the repo root. The extra is
+pytest, httpx (which starlette's `TestClient` needs) and **pytest-randomly**, which shuffles the
+test order on every run and prints the seed — so two runs of the same tree legitimately execute
+in different orders. Reproduce a run with `-p randomly --randomly-seed=<seed>`, or pin a fixed
+order with `-p no:randomly` when bisecting:
 
 ```bash
 uv pip install -e '.[dev]'

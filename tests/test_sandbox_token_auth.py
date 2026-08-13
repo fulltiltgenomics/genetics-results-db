@@ -50,12 +50,29 @@ def _mint(key=SIGNING_KEY, audience="db-api", issuer="chat-backend", age=0, ttl=
     return jwt.encode(claims, key, algorithm="HS256")
 
 
-def _reload(**env):
-    """Re-import api.main with a fresh environment — both modules read env at import time."""
+def _reload(monkeypatch, **env):
+    """Re-import api.main under `env`, with every variable it touches restored afterwards.
+
+    The environment has to be in place *before* the import, because api.sandbox_auth snapshots
+    SANDBOX_TOKEN_SIGNING_KEY and SANDBOX_ENABLED at import — so this cannot be a context
+    manager that unsets on the way out. It goes through `monkeypatch` instead, whose undo runs
+    when the caller's fixture tears down.
+
+    Restoring is not tidiness. This used to mutate os.environ directly and put nothing back, so
+    a `_reload()` that popped INTERNAL_API_SECRET left it popped for everything that ran next —
+    and since api.main reads the secret per request (genetics-results-suite-xi6), every
+    still-live module-scoped client shared by the other auth tests would have gone on consulting
+    the emptied variable. PROJECT_ID is set here too and was equally unrestored.
+
+    Pass the test's own `monkeypatch`, or a `pytest.MonkeyPatch()` that a higher-scoped fixture
+    undoes itself — a function-scoped monkeypatch cannot be requested from a module fixture.
+    """
     for key in ("INTERNAL_API_SECRET", "SANDBOX_TOKEN_SIGNING_KEY", "SANDBOX_ENABLED"):
-        os.environ.pop(key, None)
-    os.environ.update({k: v for k, v in env.items() if v is not None})
-    os.environ.setdefault("PROJECT_ID", "test-project")
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        if value is not None:
+            monkeypatch.setenv(key, value)
+    monkeypatch.setenv("PROJECT_ID", os.environ.get("PROJECT_ID", "test-project"))
     for name in ("api.sandbox_auth", "api.main"):
         sys.modules.pop(name, None)
     import api.sandbox_auth  # noqa: F401
@@ -67,8 +84,10 @@ def _reload(**env):
 # another test cannot disturb this app — it keeps its own module objects and their globals
 @pytest.fixture(scope="module")
 def client():
-    main = _reload(INTERNAL_API_SECRET=SECRET, SANDBOX_TOKEN_SIGNING_KEY=SIGNING_KEY)
+    mp = pytest.MonkeyPatch()
+    main = _reload(mp, INTERNAL_API_SECRET=SECRET, SANDBOX_TOKEN_SIGNING_KEY=SIGNING_KEY)
     yield TestClient(main.app, raise_server_exceptions=False)
+    mp.undo()
 
 
 def _get(client, token):
@@ -175,21 +194,21 @@ def test_sandbox_shaped_bearer_never_reaches_the_shared_secret_comparison(client
     assert _get(client, SECRET).status_code != 401  # the shared secret still works
 
 
-def test_signing_key_unset_rejects_every_sandbox_token():
+def test_signing_key_unset_rejects_every_sandbox_token(monkeypatch):
     """Fail closed, not warn-and-continue. Non-HS256 callers are unaffected."""
-    main = _reload(INTERNAL_API_SECRET=SECRET)
+    main = _reload(monkeypatch, INTERNAL_API_SECRET=SECRET)
     c = TestClient(main.app, raise_server_exceptions=False)
     assert _get(c, _mint()).status_code == 401
     assert _get(c, SECRET).status_code != 401
 
 
-def test_sandbox_token_bypasses_the_fail_open_early_return():
+def test_sandbox_token_bypasses_the_fail_open_early_return(monkeypatch):
     """With INTERNAL_API_SECRET unset db-api serves anyone — but not a bad sandbox token.
 
     Rule 1 of the design: route the sandbox-shaped bearer before the unset-secret early
     return, so the fail-open branch is unreachable for such a request.
     """
-    main = _reload(SANDBOX_TOKEN_SIGNING_KEY=SIGNING_KEY)
+    main = _reload(monkeypatch, SANDBOX_TOKEN_SIGNING_KEY=SIGNING_KEY)
     c = TestClient(main.app, raise_server_exceptions=False)
     assert c.get(PROTECTED_PATH).status_code != 401  # fail-open, unchanged
     assert _get(c, _mint(key="wrong")).status_code == 401
