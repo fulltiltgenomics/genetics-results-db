@@ -149,9 +149,26 @@ def require_auth(request: Request) -> None:
     if not INTERNAL_API_SECRET:
         return
     # compare as bytes: compare_digest on str raises TypeError for non-ASCII, which would
-    # surface as a 500 instead of failing closed with a 401
+    # surface as a 500 instead of failing closed with a 401.
+    #
+    # The two codecs differ on purpose — do not "fix" the latin-1 one to utf-8. Starlette
+    # decodes raw header bytes as latin-1, so re-encoding the presented token with latin-1
+    # undoes that decode exactly; utf-8 would re-encode the mojibake instead (b"s\xc3\xa9cret"
+    # comes back out as b"s\xc3\x83\xc2\xa9cret").
+    #
+    # It does NOT recover "the bytes the client sent" in general: measured off a real socket
+    # the clients disagree with each other — node fetch/undici and python-requests put latin-1
+    # on the wire, aiohttp puts utf-8, and httpx 0.28 refuses to send a non-ASCII header value
+    # at all. No codec is right for all of them, so under a hypothetical non-ASCII secret this
+    # pairing would favour the aiohttp-shaped caller and 401 the others. What makes the
+    # comparison well defined is `_require_ascii_secret` below, which refuses a non-ASCII
+    # secret at startup; every codec coincides on ASCII, which is what deployments have.
+    #
+    # No try/except on the re-encode, unlike results-api's: this takes a starlette Request, so
+    # the only str it can see came from starlette's own latin-1 decode and re-encodes by
+    # construction. Add the guard if a str-taking entry point is ever introduced here.
     if not auth_header.startswith("Bearer ") or not hmac.compare_digest(
-        token.encode("utf-8"), INTERNAL_API_SECRET.encode("utf-8")
+        token.encode("latin-1"), INTERNAL_API_SECRET.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
     request.state.principal = _INTERNAL_PRINCIPAL
@@ -184,6 +201,36 @@ def _access_log_fields(
         "principal": principal_name,
     }
 
+
+def _require_ascii_secret(secret: str) -> None:
+    """Refuse a non-ASCII INTERNAL_API_SECRET (`genetics-results-suite-ctq`).
+
+    HTTP clients do not agree on how to put a non-ASCII header value on the wire — node
+    fetch/undici and python-requests send latin-1, aiohttp sends utf-8, httpx refuses to send
+    one at all — so no server-side codec can recover the same secret from every caller and
+    byte-exactness is unachievable in general. The ASCII invariant is what makes `require_auth`
+    well defined, so it is enforced here rather than merely written down.
+
+    Failing at startup is the good failure mode: the pod never passes readiness, the rollout
+    stalls with the old pods still serving, and the message names the variable — versus every
+    internal call 401ing at request time with nothing local saying why.
+
+    Silent when the secret is absent or empty: that is the dev/test configuration, and the
+    fail-open branch of `require_auth` (warned about below) already covers it.
+    """
+    if secret and not secret.isascii():
+        raise RuntimeError(
+            "INTERNAL_API_SECRET contains non-ASCII characters. HTTP clients disagree on how "
+            "to encode a non-ASCII header value (node/undici and python-requests send latin-1, "
+            "aiohttp sends utf-8, httpx refuses to send one at all), so no server-side decoding "
+            "recovers the same secret from every caller. Set INTERNAL_API_SECRET to an ASCII "
+            "value — scripts/create-secrets.sh generates one with `openssl rand -base64 32`."
+        )
+
+
+# at import, like the warning below and require_sandbox_config: this module already reads the
+# variable at import (genetics-results-suite-xi6), and the check adds no new import-time work
+_require_ascii_secret(INTERNAL_API_SECRET)
 
 if not INTERNAL_API_SECRET:
     logger.warning(

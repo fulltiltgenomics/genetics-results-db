@@ -9,6 +9,7 @@ import os
 import sys
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -78,3 +79,58 @@ def test_non_ascii_bearer_is_401_not_500(client, token):
     header = {"Authorization": f"Bearer {token}".encode("utf-8")}
     resp = client.post("/query", json={"sql": "SELECT 1"}, headers=header)
     assert resp.status_code == 401
+
+
+def _request_with_raw_bearer(raw: bytes):
+    """A starlette Request whose Authorization header carries exactly these wire bytes.
+
+    Hand-built rather than driven through TestClient because TestClient cannot express it:
+    `starlette/testclient.py` does `value.encode()` (utf-8) on httpx's already-decoded header
+    str, so latin-1 wire bytes are silently rewritten to utf-8 before the app sees them and
+    every case below would collapse into the utf-8 one.
+    """
+    from fastapi import Request
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/query",
+            "query_string": b"",
+            "headers": [(b"authorization", raw)],
+        }
+    )
+
+
+def test_which_wire_bytes_authenticate_a_non_ascii_secret(client, monkeypatch):
+    """Pin the accept/reject map over RAW wire bytes — what genetics-results-suite-ctq changed.
+
+    Starlette latin-1-decodes the raw header bytes, so re-encoding the presented token with
+    latin-1 undoes that decode exactly. Which *client* that suits is not universal: node/undici
+    and python-requests put the latin-1 form on the wire, aiohttp the utf-8 form, and httpx
+    refuses to send either. `_require_ascii_secret` refuses a non-ASCII secret at startup, so
+    this map is unreachable in a real deployment; the comparison is still reachable, so it is
+    pinned here rather than through the app.
+    """
+    import api.main as main
+
+    monkeypatch.setattr(main, "INTERNAL_API_SECRET", "sécret")
+    # utf-8 on the wire (aiohttp-shaped): authenticates now, 401 before ctq
+    main.require_auth(_request_with_raw_bearer(b"Bearer s\xc3\xa9cret"))
+    # latin-1 on the wire (node/undici- and requests-shaped): 401 now, authenticated before ctq
+    with pytest.raises(HTTPException) as exc:
+        main.require_auth(_request_with_raw_bearer(b"Bearer s\xe9cret"))
+    assert exc.value.status_code == 401
+
+
+def test_the_ascii_guard_fires_only_on_a_non_ascii_secret(client):
+    """genetics-results-suite-ctq: the invariant require_auth relies on is enforced at startup,
+    not merely documented. Absent and empty are the dev/test configuration and stay silent."""
+    import api.main as main
+
+    with pytest.raises(RuntimeError, match="INTERNAL_API_SECRET"):
+        main._require_ascii_secret("sécret")
+    main._require_ascii_secret(SECRET)
+    main._require_ascii_secret("")
