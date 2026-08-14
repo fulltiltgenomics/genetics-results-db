@@ -696,7 +696,7 @@ Configuration via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | PROJECT_ID | (from gcloud in the scripts; a placeholder in the API) | GCP project ID — the API's fallback is not a real project, so it must be set in a deployment |
-| DATASET_ID | genetics_results | BigQuery dataset name |
+| DATASET_ID | genetics_results | BigQuery dataset name — **the default is production**; see "Dev dataset" below |
 | LOCATION | europe-west1 | BigQuery dataset location |
 | MAX_ROWS | 100000 | Maximum rows returned per query |
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
@@ -705,6 +705,72 @@ Configuration via environment variables:
 | GCS_BUCKET / GCS_PREFIX | varies by loader (placeholder `bucket-name` with an empty prefix in most, `finngen-commons` + `results_api_data/` in the newer ones) | GCS source location for `scripts/load_*.sh` |
 | CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
 | INTERNAL_API_SECRET | (unset) | Shared secret required as `Authorization: Bearer` on every endpoint except `/health`. Unset disables authentication entirely (logs a warning at startup) |
+
+### Dev dataset
+
+`DATASET_ID` is the only *setting* in the suite that selects a dataset, and its default is
+the production one. A local stack started without it queries
+`phewas-development.genetics_results` — chat-api and the browser BFF have no dataset
+setting of their own, they reach BigQuery only through this API, so the single variable
+switches the entire chain.
+
+It does **not** follow that no other service mentions a dataset name. Grepping the sibling
+repos: `genetics-results-api` and `genetics-results-browser` contain no BigQuery dataset
+name (their `dataset_id` fields are registry keys from `datasets.yaml`, a different thing),
+but `genetics-mcp-server` hardcodes `genetics_results.<view>` throughout — in the typed
+tools' generated SQL (`tools/executor.py`), in the `run_sql` tool description, and in the
+schema docs it ships. Those queries reach BigQuery through this API, so pointing it at
+`genetics_dev` does not redirect them: `authorize_query` builds `_ALLOWED_TABLE_IDS` from
+`DATASET_ID`, the dry run resolves `genetics_results.<view>` against the default project,
+and the request is rejected **403** as referencing tables outside the exposed set. It fails
+closed — an MCP client cannot reach production through a dev-pointed API — but MCP custom
+SQL and typed tools do not work against `genetics_dev` without changing the MCP server.
+
+| | |
+|---|---|
+| Dev dataset | `phewas-development:genetics_dev`, location `europe-west1` |
+| How to select it | `DATASET_ID=genetics_dev` in the environment that starts `api/main.py` |
+| Schema | complete — all 15 tables and all 15 views, created by `scripts/setup_bigquery.sh` from `schemas/` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly |
+| Data | ~3.6M rows / ~612 MB, against production's ~1.1B rows / ~224 GB |
+
+The location must be the **region** `europe-west1`, matching the production datasets, not
+the GKE zone `europe-west1-b`. A dataset's location cannot be altered after creation, and
+a query joining datasets in different locations fails outright.
+
+The subset is **chromosome 22 for the results tables**, capped at 500k rows for
+`gene_burden_results` and `open_chromatin`, plus complete copies of `datasets`,
+`phenotypes`, `gene_annotations` and `hla_associations` — the registry tables because any
+subset of them makes dev misleading, and HLA because it is chromosome 6 by construction and
+a chr22 filter would empty it. Every view returns rows.
+
+The coloc triple is **not** capped blindly, because it is the one group where a missing row
+misleads rather than merely thins. `coloc_credsets` is seeded from the credible-set IDs the
+loaded `colocalization` rows actually reference (every `cs1_id` and `cs2_id`), and
+`credible_sets` holds its chr22 slice **plus** every row for that same ID set. So both
+directions of the pivot resolve: all 41,131 `colocalization_v` rows resolve both `cs1_id`
+and `cs2_id` in `coloc_credsets_v`.
+
+Three consequences worth stating, because all three are silent:
+
+- A 500k-row cap takes an arbitrary slice, so cross-table results for the two capped tables
+  are thinner than production's; absence of a row in dev is not evidence.
+- The `credible_sets` ↔ `coloc_credsets` `cs_id` overlap is small (518 of the 3,908 IDs the
+  coloc slice references) — but that is production's own overlap for these IDs, not a dev
+  artifact. Seeding cannot raise it.
+- Row counts and query timings here mean nothing for capacity or cost work. Benchmarks
+  belong against production-scale data.
+
+`genetics_dev` was populated by `INSERT INTO genetics_dev.<table> (cols) SELECT cols FROM
+genetics_results.<table> WHERE chr = 22`, reading production rather than re-running the
+GCS loaders, which have no subsetting mechanism and would have loaded all ~224 GB
+(`coloc_credsets` and `credible_sets` use the `cs_id` seed described above instead of the
+`chr = 22` filter, reloaded with `TRUNCATE TABLE` + `INSERT` — never `CREATE OR REPLACE
+TABLE AS SELECT`, which flattens every column to NULLABLE and would drop the partitioning
+and clustering). One
+table needs its production **view** as the source instead: `genetics_results.credible_sets`
+predates the clustering swap and stores neither `resource` nor `variant`, while the schema
+in `schemas/credible_sets.sql` clusters on both, so only `credible_sets_v` exposes the full
+dev column set. Reloading the dev dataset from scratch costs about $0.01 and two minutes.
 
 CORS responses cannot use a wildcard origin: the API is configured with
 `allow_credentials=True`, and browsers reject `Access-Control-Allow-Origin: *` on

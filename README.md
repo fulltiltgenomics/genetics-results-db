@@ -75,6 +75,32 @@ Requires Google Cloud credentials configured.
 PROJECT_ID=my-google-project DATASET_ID=genetics_results PORT=8080 python api/main.py
 ```
 
+### Point local development at the dev dataset
+
+`DATASET_ID` defaults to `genetics_results`, which is **production**. Starting the API
+without setting it makes every local query — and therefore the whole local chain, since
+chat-api and the browser BFF reach BigQuery only through this service — read production
+data. Set it explicitly:
+
+```bash
+PROJECT_ID=phewas-development DATASET_ID=genetics_dev PORT=8080 python api/main.py
+```
+
+`phewas-development:genetics_dev` (`europe-west1`) holds the full 15-table / 15-view
+schema with a small subset of the data (~3.6M rows / ~612 MB): chromosome 22 only for the
+results tables (capped at 500k rows for `gene_burden_results` and `open_chromatin`),
+`coloc_credsets` and `credible_sets` seeded from the credible-set IDs the loaded
+`colocalization` rows reference so both directions of that pivot resolve, and complete
+copies of the small tables — `datasets`, `phenotypes`, `gene_annotations` and
+`hla_associations`, the last because it is chromosome 6 by construction. Every view returns
+rows, but result *values* are not comparable with production and the dataset is not a
+benchmark target.
+
+No other *service setting* selects a dataset, but `genetics-mcp-server` hardcodes
+`genetics_results.<view>` in its generated SQL and tool descriptions, so its queries are
+rejected 403 by a `genetics_dev`-pointed API rather than following it. `genetics-results-api`
+and `genetics-results-browser` name no BigQuery dataset. See `docs/project-spec.md`.
+
 ## API endpoints
 
 | Endpoint | Method | Description |
