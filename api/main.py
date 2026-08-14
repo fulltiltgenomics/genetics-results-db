@@ -7,7 +7,6 @@ import hmac
 import json
 import os
 import logging
-import re
 import sys
 import threading
 import time
@@ -22,7 +21,7 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from google.cloud import bigquery
-from google.api_core.exceptions import BadRequest, Forbidden
+from google.api_core.exceptions import BadRequest, Forbidden, NotFound
 
 try:  # packaged as `api.` in the image, run as a bare module in some scripts
     from api import sandbox_auth
@@ -522,37 +521,11 @@ def _run_internal_query(sql: str, caps: _Caps) -> "bigquery.QueryJob":
 
 # expose views (not underlying tables) so AI agents use the enriched schemas
 VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "asm_qtl_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "mpra_v", "variant_annotation_v", "peak_to_gene_v", "hla_associations_v", "phenotypes_v", "datasets_v"]
-# map base table names to views for backwards-compatible query auto-qualification
+# base table -> view. The aliasing applies only to the /schema and /tables/{name}/sample name
+# lookups; on /query a bare `credible_sets` is resolved by BigQuery to the base table itself,
+# not to `credible_sets_v`. These names are also allow-listed for /query, as they always were.
 _BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
-# every name /query accepts unqualified -> the view it resolves to (views map to themselves)
-_QUALIFY_TARGETS = {**{name: name for name in VIEWS}, **_BASE_TABLES}
 
-
-def _qualify_tables(sql: str) -> str:
-    """Qualify unqualified view/base-table names with the project and dataset.
-
-    Only genuine table positions - a name directly after FROM or JOIN - are rewritten.
-    The previous implementation replaced every occurrence of " <name>", which also hit
-    ordinary English inside string literals now that `datasets` and `phenotypes` are
-    table names: `LIKE '%uk biobank datasets%'` became
-    `LIKE '%uk biobank ``project.dataset.datasets_v``%'`, which is still valid SQL and
-    silently matched nothing, and `COUNT(*) AS datasets ... ORDER BY datasets` had its
-    alias rewritten. `\\s+` rather than a literal space because a multi-line
-    `FROM\\n  credible_sets_v` is a normal shape.
-
-    RESIDUAL: a string literal that itself contains the words "FROM <table>" or
-    "JOIN <table>" is still rewritten - telling that apart from real SQL needs a parser,
-    which is out of scope. The result is still checked by authorize_query.
-    """
-    for name, view in _QUALIFY_TARGETS.items():
-        fq = f"`{PROJECT_ID}.{DATASET_ID}.{view}`"
-        sql = re.sub(
-            rf"\b(FROM|JOIN)(\s+){re.escape(name)}\b",
-            lambda m, fq=fq: f"{m.group(1)}{m.group(2)}{fq}",
-            sql,
-            flags=re.IGNORECASE,
-        )
-    return sql
 
 # load all metadata from shared datasets.yaml (single source of truth)
 try:
@@ -758,6 +731,12 @@ def _estimate_bq_cost(bytes_processed: int) -> float:
     return round((bytes_processed / (1024**4)) * 6.25, 6)
 
 
+# the dataset BigQuery resolves unqualified names against, so callers may write
+# `FROM credible_sets_v`. It must be identical on the dry-run and execution job configs:
+# a dry run that resolves a bare name to a different table than the execution would is a
+# gate bypass, since the allow-list is checked against the dry run's referencedTables.
+_DEFAULT_DATASET = f"{PROJECT_ID}.{DATASET_ID}"
+
 # tables a caller may reference: the exposed views plus the base tables they wrap
 # (BigQuery may report either in a dry run's referencedTables for a view query).
 _ALLOWED_TABLE_IDS = {
@@ -776,15 +755,27 @@ def authorize_query(sql: str, job_config: bigquery.QueryJobConfig) -> "bigquery.
     BigQuery itself parses the statement here, so there is no pattern to evade: the
     dry run reports the real statement type and the real set of referenced tables.
     Returns the completed dry-run job so the caller can reuse its cost estimate.
+
+    `default_dataset` mirrors the caller's execution config exactly, so the statement the
+    dry run parses is the one that will run. `referencedTables` still comes back fully
+    qualified whether a name was written bare or qualified, which is what makes the
+    allow-list comparison below independent of how the caller spelled it.
     """
     dry_config = bigquery.QueryJobConfig(
         maximum_bytes_billed=job_config.maximum_bytes_billed,
         dry_run=True,
         use_query_cache=False,
+        default_dataset=job_config.default_dataset,
     )
     try:
         probe = bq_client.query(sql, job_config=dry_config)
-    except BadRequest as e:
+    except (BadRequest, NotFound) as e:
+        # NotFound is how an unresolvable name now arrives. Before `default_dataset`, a bare
+        # unknown name could not resolve at all and came back as a BadRequest ("must be
+        # qualified"); resolved against the default dataset it is a well-formed reference to
+        # a table that does not exist, which is a 404 from the jobs API. Both mean the
+        # statement was rejected before anything ran, so both are the caller's 400 — without
+        # this the 404 would escape as a 500.
         raise HTTPException(status_code=400, detail=f"Invalid query: {e.message}")
 
     statement_type = probe.statement_type
@@ -925,8 +916,6 @@ async def execute_query(request: QueryRequest, http_request: Request):
     start_time = time.perf_counter()
     sql = request.sql
 
-    sql = _qualify_tables(sql)
-
     # `QueryRequest.max_rows` carries a class-level `le=MAX_ROWS`, evaluated once at model
     # definition time and therefore identical for every caller; the per-credential cap has to
     # be applied here, after the principal is known. Tightening MAX_ROWS itself would move
@@ -937,6 +926,7 @@ async def execute_query(request: QueryRequest, http_request: Request):
     job_config = bigquery.QueryJobConfig(
         maximum_bytes_billed=caps.max_bytes_billed,
         dry_run=request.dry_run,
+        default_dataset=_DEFAULT_DATASET,
     )
 
     # BigQuery parses the statement and reports its type and referenced tables; anything
