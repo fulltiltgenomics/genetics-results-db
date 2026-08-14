@@ -53,10 +53,15 @@ def _mint(key=SIGNING_KEY, audience="db-api", issuer="chat-backend", age=0, ttl=
 def _reload(monkeypatch, **env):
     """Re-import api.main under `env`, with every variable it touches restored afterwards.
 
-    The environment has to be in place *before* the import, because api.sandbox_auth snapshots
-    SANDBOX_TOKEN_SIGNING_KEY and SANDBOX_ENABLED at import — so this cannot be a context
-    manager that unsets on the way out. It goes through `monkeypatch` instead, whose undo runs
-    when the caller's fixture tears down.
+    Only INTERNAL_API_SECRET still has to be in place *before* the import, and only because
+    api.main reads it once at startup to ASCII-validate it and to seed its
+    `_authentication_was_configured` latch. The two sandbox variables are read per call
+    (genetics-results-suite-l7z), so a test that only needs to change one of those should
+    monkeypatch it against the shared `client` fixture instead of reloading anything.
+
+    Restoring still cannot be a context manager that unsets on the way out — the reloaded module
+    outlives this call and its app keeps serving. It goes through `monkeypatch` instead, whose
+    undo runs when the caller's fixture tears down.
 
     Restoring is not tidiness. This used to mutate os.environ directly and put nothing back, so
     a `_reload()` that popped INTERNAL_API_SECRET left it popped for everything that ran next —
@@ -73,9 +78,7 @@ def _reload(monkeypatch, **env):
         if value is not None:
             monkeypatch.setenv(key, value)
     monkeypatch.setenv("PROJECT_ID", os.environ.get("PROJECT_ID", "test-project"))
-    for name in ("api.sandbox_auth", "api.main"):
-        sys.modules.pop(name, None)
-    import api.sandbox_auth  # noqa: F401
+    sys.modules.pop("api.main", None)
 
     return importlib.import_module("api.main")
 
@@ -194,12 +197,21 @@ def test_sandbox_shaped_bearer_never_reaches_the_shared_secret_comparison(client
     assert _get(client, SECRET).status_code != 401  # the shared secret still works
 
 
-def test_signing_key_unset_rejects_every_sandbox_token(monkeypatch):
-    """Fail closed, not warn-and-continue. Non-HS256 callers are unaffected."""
-    main = _reload(monkeypatch, INTERNAL_API_SECRET=SECRET)
-    c = TestClient(main.app, raise_server_exceptions=False)
-    assert _get(c, _mint()).status_code == 401
-    assert _get(c, SECRET).status_code != 401
+def test_signing_key_unset_rejects_every_sandbox_token(client, monkeypatch):
+    """Fail closed, not warn-and-continue. Non-HS256 callers are unaffected.
+
+    No reload: the key is read per call (genetics-results-suite-l7z), so unsetting it on a
+    live app is the same condition as never having set it — and a strictly better test of it,
+    since it is the app the rest of this file uses.
+
+    The 200 first is what makes that true. Without it the test would also pass against an app
+    whose sandbox path was already dead for some other reason, and the `delenv` would be
+    proving nothing.
+    """
+    assert _get(client, _mint()).status_code != 401
+    monkeypatch.delenv("SANDBOX_TOKEN_SIGNING_KEY")
+    assert _get(client, _mint()).status_code == 401
+    assert _get(client, SECRET).status_code != 401
 
 
 def test_sandbox_token_bypasses_the_fail_open_early_return(monkeypatch):
@@ -213,6 +225,93 @@ def test_sandbox_token_bypasses_the_fail_open_early_return(monkeypatch):
     assert c.get(PROTECTED_PATH).status_code != 401  # fail-open, unchanged
     assert _get(c, _mint(key="wrong")).status_code == 401
     assert _get(c, _mint()).status_code != 401
+
+
+# --- when the signing key is read (genetics-results-suite-l7z) -----------------------------
+
+
+def test_the_signing_key_is_read_per_request_not_once_at_import(monkeypatch):
+    """Import first, set the variable second — the ordering pytest collection actually produces.
+
+    Fails against the old module-scope snapshot, which froze the key to "" for the life of the
+    process and rejected every sandbox token forever after. The hazard is the order-dependence
+    itself: which test file imported api.sandbox_auth first decided what the sandbox path did.
+    """
+    main = _reload(monkeypatch, INTERNAL_API_SECRET=SECRET)  # signing key unset at import
+    c = TestClient(main.app, raise_server_exceptions=False)
+    assert _get(c, _mint()).status_code == 401
+
+    monkeypatch.setenv("SANDBOX_TOKEN_SIGNING_KEY", SIGNING_KEY)
+    assert _get(c, _mint()).status_code != 401
+
+
+def test_a_changed_or_removed_signing_key_can_only_reject_more(client, monkeypatch):
+    """Why this accessor is NOT latched, unlike api.main's `_internal_api_secret`.
+
+    That one latches because "" there means "authentication was never configured" and takes a
+    fail-OPEN early return, so a per-request read would let an emptied variable *disable* auth.
+    The signing key has no such value: every state of it except the exact minting key rejects.
+    Both runtime transitions are therefore strictly stricter, which is what this pins — removing
+    the key 401s sandbox tokens without opening anything, and rotating it invalidates tokens
+    minted under the old key rather than accepting them.
+    """
+    assert _get(client, _mint()).status_code != 401
+
+    monkeypatch.delenv("SANDBOX_TOKEN_SIGNING_KEY")
+    assert _get(client, _mint()).status_code == 401
+    assert client.get(PROTECTED_PATH).status_code == 401  # no fail-open appeared
+    assert _get(client, SECRET).status_code != 401  # the shared-secret path is untouched
+
+    rotated = "a-rotated-sandbox-signing-key-32-bytes+"
+    monkeypatch.setenv("SANDBOX_TOKEN_SIGNING_KEY", rotated)
+    assert _get(client, _mint()).status_code == 401
+    assert _get(client, _mint(key=rotated)).status_code != 401
+
+
+# --- keys the crypto layer itself refuses --------------------------------------------------
+
+# PyJWT's HMAC prepare_key refuses a PEM outright (InvalidKeyError, a PyJWTError *sibling* of
+# InvalidTokenError, not a subclass) rather than using it as HMAC material
+PEM_SHAPED_KEY = (
+    "-----BEGIN PUBLIC KEY-----\n"
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZm9vYmFyYmF6cXV1eA==\n"
+    "-----END PUBLIC KEY-----\n"
+)
+
+# what os.environ hands back for a variable holding a non-UTF-8 byte (surrogateescape); PyJWT
+# utf-8-encodes a str key, and surrogates are not encodable -> UnicodeEncodeError
+SURROGATE_KEY = "sandbox-signing-key-\udcff-from-non-utf8-bytes"
+
+CRYPTO_REFUSED_KEYS = pytest.mark.parametrize(
+    "key", [PEM_SHAPED_KEY, SURROGATE_KEY], ids=["pem", "surrogate"]
+)
+
+
+@CRYPTO_REFUSED_KEYS
+def test_a_key_the_crypto_layer_refuses_is_a_401_not_a_500(client, monkeypatch, key):
+    """A degenerate signing key must reject the caller, not fault the request.
+
+    Both of these escaped the old `except jwt.InvalidTokenError` and surfaced as 500. Nobody was
+    admitted either way, but a 500 skips require_auth's `endpoint_access` rejection line, so the
+    operator sees an unattributed fault where an auth failure happened.
+    """
+    monkeypatch.setenv("SANDBOX_TOKEN_SIGNING_KEY", key)
+    assert _get(client, _mint()).status_code == 401
+    assert _get(client, SECRET).status_code != 401  # other callers unaffected
+
+
+@CRYPTO_REFUSED_KEYS
+def test_verify_sandbox_token_raises_only_sandbox_token_error(monkeypatch, key):
+    """The docstring's "always a hard 401" as an assertion: nothing else escapes this call.
+
+    pytest.raises pins the type — anything the crypto layer raises that is not translated fails
+    here rather than being caught, which is what the widened `except` exists to guarantee.
+    """
+    from api import sandbox_auth
+
+    monkeypatch.setenv("SANDBOX_TOKEN_SIGNING_KEY", key)
+    with pytest.raises(sandbox_auth.SandboxTokenError):
+        sandbox_auth.verify_sandbox_token(_mint())
 
 
 # --- discrimination on alg, not on dots ----------------------------------------------------
@@ -249,39 +348,33 @@ def test_non_jwt_bearers_are_not_sandbox_shaped(bearer):
         ("", ""),            # the both-unset case rule 6 exists for
     ],
 )
-def test_refuses_to_start_when_the_sandbox_is_deployed_and_a_secret_is_missing(internal, signing):
-    for name in ("api.sandbox_auth",):
-        sys.modules.pop(name, None)
-    os.environ["SANDBOX_ENABLED"] = "true"
-    os.environ["SANDBOX_TOKEN_SIGNING_KEY"] = signing
-    try:
-        import api.sandbox_auth as sandbox_auth
+def test_refuses_to_start_when_the_sandbox_is_deployed_and_a_secret_is_missing(
+    monkeypatch, internal, signing
+):
+    """No sys.modules juggling: `require_sandbox_config` reads both variables when CALLED
+    (genetics-results-suite-l7z), so setting them on the already-imported module is enough.
+    Against the old import-time snapshot this file's own import would have frozen
+    SANDBOX_ENABLED to false and none of these three cases could fire at all."""
+    from api import sandbox_auth
 
-        with pytest.raises(SystemExit) as exc:
-            sandbox_auth.require_sandbox_config(internal)
-        assert exc.value.code == 1
-    finally:
-        os.environ.pop("SANDBOX_ENABLED", None)
-        os.environ.pop("SANDBOX_TOKEN_SIGNING_KEY", None)
-        sys.modules.pop("api.sandbox_auth", None)
+    monkeypatch.setenv("SANDBOX_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_TOKEN_SIGNING_KEY", signing)
 
-
-def test_starts_when_the_sandbox_is_deployed_and_both_secrets_are_present():
-    sys.modules.pop("api.sandbox_auth", None)
-    os.environ["SANDBOX_ENABLED"] = "true"
-    os.environ["SANDBOX_TOKEN_SIGNING_KEY"] = SIGNING_KEY
-    try:
-        import api.sandbox_auth as sandbox_auth
-
-        sandbox_auth.require_sandbox_config(SECRET)  # must not raise
-    finally:
-        os.environ.pop("SANDBOX_ENABLED", None)
-        os.environ.pop("SANDBOX_TOKEN_SIGNING_KEY", None)
-        sys.modules.pop("api.sandbox_auth", None)
+    with pytest.raises(SystemExit) as exc:
+        sandbox_auth.require_sandbox_config(internal)
+    assert exc.value.code == 1
 
 
-def test_sandbox_not_deployed_leaves_the_existing_behaviour_alone():
-    sys.modules.pop("api.sandbox_auth", None)
-    import api.sandbox_auth as sandbox_auth
+def test_starts_when_the_sandbox_is_deployed_and_both_secrets_are_present(monkeypatch):
+    from api import sandbox_auth
 
+    monkeypatch.setenv("SANDBOX_ENABLED", "true")
+    monkeypatch.setenv("SANDBOX_TOKEN_SIGNING_KEY", SIGNING_KEY)
+    sandbox_auth.require_sandbox_config(SECRET)  # must not raise
+
+
+def test_sandbox_not_deployed_leaves_the_existing_behaviour_alone(monkeypatch):
+    from api import sandbox_auth
+
+    monkeypatch.delenv("SANDBOX_ENABLED", raising=False)
     sandbox_auth.require_sandbox_config("")  # must not raise

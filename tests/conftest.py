@@ -34,11 +34,13 @@ def restore_auth_env():
     `os.environ[...] = ...` in a test gets no warning that anything depends on it — but it is
     the second line, and a leak it catches is still a bug where it was written.
 
-    Why it matters more since genetics-results-suite-xi6: only INTERNAL_API_SECRET is read at
-    request time, so only that one can affect an already-imported app. api/sandbox_auth.py
-    snapshots SANDBOX_TOKEN_SIGNING_KEY and SANDBOX_ENABLED at import, so popping either affects
-    no live app object at all — and popping the signing key fails closed anyway. They are
-    restored here because they configure the NEXT import, not because a live app rereads them.
+    All three are read at call time now, so restoring all three is load-bearing rather than
+    merely symmetric-looking. That is new: until genetics-results-suite-l7z, api/sandbox_auth.py
+    snapshotted SANDBOX_TOKEN_SIGNING_KEY and SANDBOX_ENABLED at import, so restoring those two
+    changed no live app object and only configured the NEXT import. Since l7z a leaked signing
+    key reaches every already-imported app's sandbox path. It still cannot open anything —
+    an unset or wrong key rejects every sandbox token, and SANDBOX_ENABLED is consulted only by
+    the startup check — so a leak costs a confusing failure, not an authorization bug.
 
     Function-scoped and autouse, so it wraps the test but not the module-scoped fixtures that
     set this env up: pytest instantiates higher-scoped fixtures first, so the snapshot already
