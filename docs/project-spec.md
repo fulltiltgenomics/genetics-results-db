@@ -20,7 +20,7 @@ genetics-results-db is a BigQuery-based database solution for storing and queryi
 - Query authorization via a BigQuery dry run: only single `SELECT` statements over the exposed views are executed (though read-only IAM is recommended in any case)
 - Cost controls via configurable bytes-billed limits and dry-run support
 - Direct loading of tsv.gz files from GCS with schema validation
-- Auto-qualification of table names in queries for simpler SQL (base table names are redirected to views)
+- Unqualified table names resolved by BigQuery via the job config's `default_dataset`, so callers may write `FROM credible_sets_v` (base table names are exposed too)
 
 ## Architecture
 
@@ -28,8 +28,8 @@ genetics-results-db is a BigQuery-based database solution for storing and queryi
 GCS (tsv.gz files)
       ↓ (one-time load via bq load)
 BigQuery Dataset
-  ├── credible_sets (partitioned by chr, clustered by dataset, data_type, most_severe)
-  │   └── credible_sets_v (view: adds variant, resource columns)
+  ├── credible_sets (partitioned by chr, clustered by data_type, resource, variant, pos)
+  │   └── credible_sets_v (view: adds maf; variant and resource are stored columns)
   ├── colocalization (partitioned by chr, clustered by dataset pairs)
   │   └── colocalization_v (view: adds resource columns)
   ├── coloc_credsets (partitioned by chr, clustered by dataset, data_type)
@@ -52,8 +52,12 @@ BigQuery Dataset
   │   └── variant_annotation_v (view: adds constant resource='finngen')
   ├── peak_to_gene (unpartitioned link table, clustered by symbol, cell_type, peak_id)
   │   └── peak_to_gene_v (view: adds resource column)
-  └── hla_associations (unpartitioned, clustered by phenotype, gene, allele)
-      └── hla_associations_v (view: adds resource column, mapped to 'finngen')
+  ├── hla_associations (unpartitioned, clustered by phenotype, gene, allele)
+  │   └── hla_associations_v (view: adds resource column, mapped to 'finngen')
+  ├── phenotypes (unpartitioned metadata table, clustered by dataset, trait_original)
+  │   └── phenotypes_v (view: pass-through — resource is already a registry column)
+  └── datasets (unpartitioned metadata table, clustered by dataset, resource)
+      └── datasets_v (view: pass-through — resource is already a registry column)
       ↓
 API (FastAPI) — exposes only views, not underlying tables
       ↓
@@ -66,9 +70,21 @@ AI Agents / Applications
 
 Fine-mapped credible set variants from multiple genetics datasets.
 
+`resource` and `variant` are **stored** columns here, unlike in the other product tables
+where `resource` is a view-derived `CASE`. They are the clustering keys, and a view-derived
+column prunes nothing — before the change, `WHERE resource = 'finngen'` on the view scanned
+*more* than an unfiltered scan, because the `CASE` forced an extra read of `dataset`.
+Clustering on the two columns callers actually filter by cut the weighted cost of the
+commonest logged query shapes by 87%. Consequences: `resource` is materialised by
+`scripts/load_data.py` (`DERIVED_COLUMNS`) from the `datasets.yaml` rules, so a mapping-rule
+change needs a reload or backfill rather than just re-creating the view; and filtering by
+`dataset`, `gene_most_severe` or `most_severe` is now slower than filtering by `resource`.
+See [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md).
+
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
 | dataset | STRING | Yes | Source dataset (FinnGen_R14, Open_Targets_26.06, etc.) |
+| resource | STRING | Yes | Resource identifier (lowercase), derived from `dataset` at load time. Clustering key — filter on this, not `dataset` |
 | data_type | STRING | Yes | GWAS, eQTL, pQTL, sQTL, caQTL |
 | trait | STRING | Yes | Phenotype/trait name. For `caQTL` rows this is a chromatin peak id (`chr-start-end`), never a gene — reach genes via [peak_to_gene](#peak_to_gene) |
 | trait_original | STRING | Yes | Original trait name |
@@ -77,6 +93,7 @@ Fine-mapped credible set variants from multiple genetics datasets.
 | pos | INT64 | Yes | Position |
 | ref | STRING | Yes | Reference allele |
 | alt | STRING | Yes | Alternate allele |
+| variant | STRING | Yes | Variant identifier (chr:pos:ref:alt), computed at load time. Clustering key |
 | mlog10p | FLOAT64 | No | -log10(p-value) |
 | beta | FLOAT64 | Yes | Effect size |
 | se | FLOAT64 | No | Standard error |
@@ -346,7 +363,7 @@ Classical HLA allele associations from FinnGen R14: every imputed HLA allele tes
 
 **Why the table exists.** results-api serves the same data from per-phenotype tabix files, which answers "all alleles for a trait". The reverse — "all traits for an allele", the PheWAS view that makes MHC pleiotropy visible — spans all 2,712 files and is only answerable here. Clustering is `phenotype, gene, allele` to serve both directions.
 
-Two columns need care when querying. `pval` **underflows to 0** for the strongest signals (coeliac `DQB1*02:01` is mlogp 1596), so rank and threshold on `mlogp`. `info` is the allele's imputation quality (constant per allele across phenotypes) and filtering on it is not optional in practice: rare alleles imputed below ~0.5 produce enormous unstable betas that read as spectacular associations but are artifacts.
+Two columns need care when querying. `pval` **underflows to 0** for the strongest signals (coeliac `DQB1*02:01` is mlogp 1596), so rank and threshold on `mlogp` (`mlog10p` when querying the view — see the rename below). `info` is the allele's imputation quality (constant per allele across phenotypes) and filtering on it is not optional in practice: rare alleles imputed below ~0.5 produce enormous unstable betas that read as spectacular associations but are artifacts.
 
 The table is unpartitioned — every row is chr 6, so a `RANGE_BUCKET(chr, …)` partition would put the whole table in one partition anyway. `dataset` is constant and injected at load time.
 
@@ -368,6 +385,20 @@ The table is unpartitioned — every row is chr 6, so a `RANGE_BUCKET(chr, …)`
 | dataset | STRING | Yes | Source dataset (constant `finngen_hla`) |
 
 The `hla_associations_v` view maps `dataset` to `resource = 'finngen'` explicitly rather than via the lowercase fallback the other product views use, since that would yield `finngen_hla` — these results belong to the same resource as the FinnGen GWAS they were run alongside.
+
+It also **renames the statistic columns** to the suite's house spelling, which is what every consumer sees and what the column tables in `../genetics-results-suite/configs/datasets.yaml` document:
+
+| table column | view column |
+|---|---|
+| mlogp | mlog10p |
+| sebeta | se |
+| af_alt | af |
+| af_alt_cases | af_cases |
+| af_alt_controls | af_controls |
+
+The values are unchanged — the rename exists because results-api serves the same quantities from the per-phenotype tabix files under `mlog10p`/`se`/`af`/`af_cases`/`af_controls`, and the SDK's `hla()` returns results from both stores (`genetics-results-suite-5wm`). The table keeps FinnGen's native spelling so the loader stays a straight copy of the staged file. Because of the rename the view lists its columns explicitly instead of `SELECT *`: a new column on `hla_associations` must be named in the view too, or it will not surface. `tests/test_hla_view_columns.py` is what catches the omission — it parses the select list of `schemas/hla_associations_v.sql` offline and asserts its source identifiers (the left side of `mlogp AS mlog10p`) cover every field of `SCHEMAS["hla_associations"]` in `scripts/load_data.py`.
+
+Replacing this view is not covered by the suite's `deploy.sh` — it is applied by `scripts/setup_bigquery.sh` — and it is not compatible with the previously deployed mcp-server. See "HLA column rename rollout" in `../genetics-results-suite/docs/project-spec.md` for the ordering.
 
 ### peak_to_gene
 
@@ -428,12 +459,70 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 | GENOME_enrichment_nfe | FLOAT64 | No | Finnish vs non-Finnish European (NFE) enrichment, gnomAD genomes |
 | index | INT64 | No | Row index in the source annotation file |
 
+### phenotypes
+
+Trait/phenotype metadata: the human-readable name, trait type, category and sample sizes behind the opaque phenotype codes the results tables store. One row per `(dataset, trait_original)`, 32,611 rows. Built from the per-dataset `metadata_file` JSON/TSVs referenced by `datasets.yaml`, which were previously reachable only through genetics-results-api — so resolving a trait code cost a separate round trip.
+
+**Join on `trait_original`, never on `trait`.** In `credible_sets`, `colocalization`, `coloc_credsets`, `exome_variant_results` and `gene_burden_results`, `trait_original` is the phenotype code and `trait` is a display form that differs for most rows: FinnGen R14 stores `trait='Height,_inverse-rank_normalized'` with `trait_original='HEIGHT_IRN'`, Genebass stores `trait='Mean corpuscular volume'` with `trait_original='continuous_30040_both_sexes__irnt'`, and QTL rows store a gene symbol in `trait` with the Ensembl id in `trait_original`. Joining on `trait` returns zero rows silently.
+
+```sql
+SELECT cs.dataset, cs.trait_original, p.trait_name, p.n_cases, cs.pip
+FROM credible_sets_v cs
+LEFT JOIN phenotypes_v p USING (dataset, trait_original)
+WHERE cs.chr = 6 AND cs.pos BETWEEN 32000000 AND 33000000
+```
+
+**Coverage is partial by design.** Only datasets that ship a phenotype metadata file have rows — FinnGen R14/R12/Kanta/drugs, the FinnGen+UKBB and FinnGen+MVP+UKBB meta-analyses, Open Targets, Genebass, COVID-19 HGI and IIBDGC. QTL datasets have none (their traits are genes, proteins and peaks, resolved via `gene_annotations` and `peak_to_gene`), and neither do datasets whose codes are already readable (PGC, GP2, BipEx2, SCHEMA2, IBD_exome). Use a `LEFT JOIN` when the dataset is not known in advance. Ranked fuzzy phenotype *search* stays on results-api; this table serves exact resolution and SQL-expressible filtering.
+
+| Column | Type | Required | Description |
+|---|---|---|---|
+| dataset | STRING | Yes | Results-view dataset name; joins the `dataset` column of every results view |
+| trait_original | STRING | Yes | Phenotype code exactly as the results views store it — the join key |
+| trait_name | STRING | No | Human-readable trait name |
+| trait_type | STRING | No | `binary` or `quantitative`; NULL when the source states neither |
+| category | STRING | No | Source grouping (FinnGen ICD chapter, Kanta class, Open Targets project id, Genebass trait_type) |
+| n_samples | INT64 | No | Total analysed sample size; NULL (not 0) when unreported |
+| n_cases | INT64 | No | Number of cases |
+| n_controls | INT64 | No | Number of controls |
+| dataset_id | STRING | Yes | ONE contributing `datasets.yaml` registry key — provenance, **not** a join key: merged `datasets` rows keep only their first contributor, so `finngen_kanta_r12` and `genebass_gene_based` match no `datasets` row. Join on `dataset`, or on `dataset_id IN UNNEST(datasets.dataset_ids)` |
+| resource | STRING | Yes | Resource the dataset belongs to |
+| author | STRING | No | Study author; per-study for Open Targets |
+| publication_date | DATE | No | NULL rather than invented when the source gives only a year |
+| version | STRING | No | Dataset version label |
+| coloc_partner_only | BOOL | Yes | TRUE for traits whose dataset exists only as a colocalization partner (FinnGen R12 core and R12 Kanta) |
+
+### datasets
+
+Dataset registry: what every `dataset` value appearing in the results views actually is. 888 rows, of which 841 are eQTL Catalogue QTD sub-studies. Unique on `dataset`, so `JOIN datasets_v USING (dataset)` never fans results out — where several registry entries share one results-view dataset (`pgc_scz` + `pgc_bip` inside `PGC`, the two Genebass products inside `genebass`, the two IBD exome products inside `IBD_exome`) they are merged into one row and `dataset_ids` lists every contributor.
+
+`dataset` is NULL for the seven registry entries with no BigQuery presence — summary-statistics-only products, expression, chromatin peaks and gene-disease sets that only results-api serves. They are kept so the table answers "what data exists at all"; filter `dataset IS NOT NULL` for queryable datasets only.
+
+| Column | Type | Required | Description |
+|---|---|---|---|
+| dataset | STRING | No | Results-view dataset name; NULL when the dataset has no BigQuery presence |
+| dataset_id | STRING | Yes | Primary `datasets.yaml` registry key |
+| dataset_ids | ARRAY&lt;STRING&gt; | No | Every registry key merged into this row |
+| resource | STRING | Yes | Resource name; matches the derived `resource` column of the results views |
+| resource_label | STRING | No | Display label for the resource |
+| resource_aliases | ARRAY&lt;STRING&gt; | No | Alternative names users write for the resource |
+| version | STRING | No | Dataset version label |
+| description | STRING | No | What the dataset is, its cohort and caveats; merged entries joined with ` \| ` |
+| author | STRING | No | Producing consortium; for QTD sub-studies the source study label |
+| publication_date | DATE | No | Release/publication date |
+| data_type | STRING | No | Lower-case registry vocabulary (`gwas`, `eQTL`, `pqtl`, …), NOT the upper-case `data_type` of the results views |
+| trait_type | STRING | No | Dataset-level `binary`/`quantitative`/`mixed` |
+| n_samples | INT64 | No | Dataset-level sample size where the registry states one |
+| pseudo_credible_sets | BOOL | Yes | TRUE when this dataset's credible sets are LD-clumped proxies, not SuSiE fine-mapping — check before interpreting `pip`/`cs_size` |
+| coloc_partner_only | BOOL | Yes | TRUE when the dataset ships no independently queryable product |
+| collection | BOOL | Yes | TRUE for a collection whose sub-studies carry `subdataset_of` = its `dataset_id` |
+| subdataset_of | STRING | No | Parent collection's `dataset_id` for sub-studies (QTD ids under `eqtl_catalogue`) |
+
 ## Technical Implementation
 
 ### BigQuery Configuration
 
-- **Partitioning**: Result tables partitioned by chromosome using `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`. The two small reference/link tables (`gene_annotations`, `peak_to_gene`) are unpartitioned — a full scan of them is cheap and their access is gene-keyed rather than positional.
-- **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables)
+- **Partitioning**: Result tables partitioned by chromosome using `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`. The small reference/link/metadata tables (`gene_annotations`, `peak_to_gene`, `phenotypes`, `datasets`) are unpartitioned — a full scan of them is cheap and their access is gene-keyed rather than positional.
+- **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables). `credible_sets` is the exception and the model to copy for high-traffic tables: it clusters on `data_type, resource, variant, pos`, the columns callers are actually told to filter by, which required storing `resource` and `variant` instead of deriving them in the view — clustering cannot use a view-derived expression. Clustering and partitioning cannot be changed in place; see [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md) for the rebuild pattern and why `setup_bigquery.sh` cannot do it.
 
 ### API Service
 
@@ -483,7 +572,7 @@ Every query is authorized before it runs (see Security → Query authorization).
 
 ### Schema Response Format
 
-`/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Column `mode` (NULLABLE/REQUIRED) and `row_count` are read from the underlying base table, since BigQuery views always report every column as NULLABLE. View-only derived columns are declared explicitly: `variant` and `resource`/`resource1`/`resource2` are REQUIRED (non-null transforms of REQUIRED base columns), while `maf` is NULLABLE (`LEAST(aaf, 1-aaf)` with nullable `aaf`). Two shapes:
+`/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Column `mode` (NULLABLE/REQUIRED) and `row_count` are read from the underlying base table, since BigQuery views always report every column as NULLABLE. View-only derived columns are declared explicitly: `variant` and `resource`/`resource1`/`resource2` are REQUIRED (non-null transforms of REQUIRED base columns), while `maf` is NULLABLE (`LEAST(aaf, 1-aaf)` with nullable `aaf`). For `credible_sets_v` the base table now answers for `variant`/`resource` directly — they are stored `NOT NULL` columns there, which is why the schema file declares them `NOT NULL` rather than following the nullable stored `variant` of `variant_effect`/`mpra`/`variant_annotation`: it keeps `/schema` reporting REQUIRED as before. Two shapes:
 
 - `allowed_values`: flat list of valid values (e.g. `resource`, `dataset`, `most_severe`).
 - `allowed_values_by_<col>`: mapping from a parent column's value to the values valid for that parent. Used when a column's valid set depends on another (e.g. `data_type` depends on `resource`, `annotation` depends on `resource`).
@@ -509,8 +598,38 @@ Structured JSON logging to stdout, compatible with GCP Cloud Logging. Each endpo
 
 - `message`: endpoint name (query, schema, sample, stats)
 - `log_type`: "endpoint_access"
+- `service`: the constant `"db-api"` — the **service discriminator** in the shared sink (see below)
+- `log_source`: `LOG_SOURCE`, default `genetics_db_api_prod` — which *environment* wrote the row, not which service
+- `endpoint_path`: the route template (`/query`, `/schema`, `/tables/{table_name}/sample`, `/stats`)
+- `http_method`
+- `principal`: which credential authorized the call — `internal` (the shared secret), `sandbox` (a validated execution token), or `unauthenticated` (the fail-open branch, `INTERNAL_API_SECRET` unset)
 - `duration_ms`: request duration in milliseconds
 - Endpoint-specific fields: `sql`, `dry_run`, `total_rows`, `rows_returned`, `bytes_processed`, `estimated_cost_usd` (for `/query`); `table`, `tables_returned` (for `/schema`); `table`, `rows_returned` (for `/sample`)
+
+**No `user_email`, deliberately.** db-api sits behind results-api and the internal secret rather
+than in front of users, so its caller is a *service*, not a person; `principal` names the
+credential, which is the only principal that exists here. Do not read the absence as "the user
+was not resolved" — there is no user to resolve.
+
+**Why `service` exists, and why it is not `log_source`.** db-api's rows land in
+`phewas-development.genetics_api_logs.stdout` together with results-api's, because a Cloud
+Logging → BigQuery sink names its table after the log ID (`stdout`), not after the service.
+Something in the payload therefore has to say which service wrote the row, and the two things
+that previously did the job both move:
+
+- `endpoint_path IS NULL` identified db-api only while db-api emitted no path — the *absence* of
+  a field, which stopped meaning "db-api" the moment db-api started emitting `endpoint_path`.
+- `log_source` is derived from the environment, carries no service name, is asymmetric between
+  the two services (`genetics_db_api_prod` vs results-api's `finngenie_prod`), and has already
+  been renamed once in production (`genetics-results-api-prod` → `finngenie_prod`, 2026-06-03).
+  A query keyed on a renamed value returns **nothing and no error**.
+
+`service` is a module constant (`api/main.py`, `SERVICE = "db-api"`), not read from the
+environment, so only an edit to that line can move it. `log_source` is kept as the *environment*
+axis. The sink's BigQuery schema auto-evolves, so `service` gets its own column on the first row
+written after this ships — no migration. Rows written **before** it do not have one; see
+`genetics-results-suite/docs/project-spec.md` → "Log sinks" for the three eras a historical query
+has to span.
 
 BigQuery cost is estimated at $6.25 per TiB (on-demand pricing). Noisy loggers (uvicorn.access, google, urllib3, asyncio) are suppressed to WARNING level.
 
@@ -518,11 +637,19 @@ BigQuery cost is estimated at $6.25 per TiB (on-demand pricing). Noisy loggers (
 
 #### Authentication
 
-Every endpoint except `/health` requires `Authorization: Bearer $INTERNAL_API_SECRET` — the same shared secret chat-backend and mcp-server already send on every call, so no client change was needed. The comparison is constant-time (`hmac.compare_digest`).
+Every endpoint except `/health` requires `Authorization: Bearer $INTERNAL_API_SECRET` — the same shared secret chat-backend and mcp-server already send on every call, so no client change was needed. The comparison is constant-time (`hmac.compare_digest`) and runs on the **bytes** of both sides: `compare_digest` raises `TypeError` when handed a `str` containing non-ASCII, which turned a bad credential into a 500 instead of a 401 (`genetics-results-suite-zyi`). **The two sides use different codecs on purpose** (`genetics-results-suite-ctq`): the presented token is re-encoded **latin-1**, which undoes exactly how starlette decoded the raw header bytes (verified on the pinned starlette 1.6.0) — UTF-8 re-encoded the mojibake instead (`b"s\xc3\xa9cret"` came back out as `b"s\xc3\x83\xc2\xa9cret"`). `INTERNAL_API_SECRET` stays **UTF-8**. This is *not* justified by "callers transmit it UTF-8-encoded": measured off a real socket, the clients disagree with each other — node fetch/undici and python-requests put latin-1 on the wire, aiohttp puts UTF-8, and httpx 0.28 (which is what mcp-server and chat-backend use) refuses to send a non-ASCII header value at all. Byte-exactness across all callers is therefore unachievable, and under a hypothetical non-ASCII secret this pairing would authenticate the aiohttp-shaped caller and 401 the others — the reverse of the old UTF-8/UTF-8 pairing. What makes the comparison well defined is the **ASCII invariant**, now enforced rather than assumed: `_require_ascii_secret` refuses a non-ASCII `INTERNAL_API_SECRET`, staying silent when it is absent or empty (the dev/test shape). The invariant holds at both times, and **the two times behave differently on purpose**, because `require_auth` obtains the secret only through `_internal_api_secret()` (`genetics-results-suite-xi6`, below) and validating only the import-time snapshot would leave the comparison running on bytes nothing had checked. **At import** `_require_ascii_secret` **raises**: the failure mode is deliberately a startup crash — the pod never passes readiness and the rollout stalls with the old pods still serving, rather than every internal call 401ing at request time with nothing local saying why. **At request time** the accessor **fails closed instead — 401, never an exception.** Raising there would propagate out of a FastAPI dependency as a **500 for every call, including one presenting the correct credential**, on a pod kubelet keeps Ready because `/health` returns before the read — the inverse of the failure mode above. A non-ASCII value can only reach the request-time read through an in-process mutation of `os.environ`, which nothing in `api/` does and no pod environment permits, so refusing is the right answer there and crashing is the right answer at startup. Every codec coincides on ASCII, which is what every deployment has, so nothing observable changed. There is no `try/except UnicodeEncodeError` around the re-encode as there is in results-api, because `require_auth` takes a starlette `Request` and can only see a str starlette itself latin-1-decoded; the comment there says so. `tests/test_api_auth.py` pins the ASCII behaviour, the startup guard, and — with a hand-built ASGI scope — which raw wire bytes authenticate under a non-ASCII secret. That last one cannot be written with TestClient: `starlette/testclient.py` re-encodes httpx's decoded header str as UTF-8, so latin-1 wire bytes never reach the app. The sandbox branch does not shield this — it declines a non-ASCII bearer as not `alg: HS256`-shaped, which is precisely what lets it reach the comparison.
 
 `/health` is exempt because kubelet probes and the monitor CronJob poll it without credentials. FastAPI mounts `/docs`, `/redoc` and `/openapi.json` with `add_route`, which bypasses app-level dependencies, so those three are re-declared as ordinary routes and are authenticated too.
 
 **Fails open when `INTERNAL_API_SECRET` is unset**, logging a startup warning, so local development works unchanged and a cluster mid-rollout doesn't hard-fail. In the deployment the env var comes from the `genetics-secrets/internal-api-secret` key, which `create-secrets.sh` always populates.
+
+**The secret is read per request, not snapshotted at import** (`genetics-results-suite-xi6`). It used to be a module global assigned at import, which made *when the module was first imported* decide whether authentication ran at all: pytest imports every test module at collection time, before any fixture sets the variable, so a shuffled run (`--randomly-seed=2662673150`) froze it to `""`, `require_auth` took its fail-open branch, and the nine tests in `test_api_auth.py` that assert 401 got 200 and **failed** — 9 failed, 87 passed. **The defect was a seed-dependent red suite, not a silently green one**; an earlier version of this paragraph and of the bead note claimed the reverse ("a green suite that had never exercised the auth path"), which is backwards, since a test asserting 401 that receives 200 fails loudly. The justification is the order-dependence itself: the auth path's behaviour depended on collection order, so a shuffled run could go red for reasons unrelated to the change under test, and any future module-scope `import api.main` in a test file would freeze the secret and break an unrelated file.
+
+`require_auth` now calls `_internal_api_secret()`, which reads the environment and ASCII-validates in one place; the import-time read remains, purely so a bad secret still fails fast at startup. **The accessor latches, deliberately asymmetrically**: a runtime change may *enable* authentication (empty → set, which is what the ordering tests need) but may never *disable* it — once the process has observed a non-empty secret, a later empty or deleted one is a fail-**closed** condition (401), not a licence to admit everyone with `principal=None`. The old module global bought that property for free, because a live app kept its own copy; a plain per-request read would have given it away. It is unreachable under a running pod (immutable environ, nothing in `api/` writes `os.environ`) but routine in-process, which is why the tests need it. `tests/test_secret_read_timing.py` pins both import orderings and the latch explicitly rather than relying on a seed.
+
+`api/sandbox_auth.py` reads `SANDBOX_TOKEN_SIGNING_KEY` and `SANDBOX_ENABLED` per call too (`genetics-results-suite-l7z`), which had been left on the import-time snapshot when `INTERNAL_API_SECRET` moved off it. **It is deliberately not latched, and copying `_internal_api_secret`'s latch here would be wrong**: that latch exists because `""` means "authentication was never configured" and takes a fail-**open** early return, so an emptied variable could disable authentication. The signing key governs no fail-open branch — an unset key raises and a rotated one fails the signature, so *every* value except the exact minting key rejects, and the only runtime transitions a plain read admits are unset → set (the ordering hazard, removed) and set → unset/changed (strictly stricter). `require_sandbox_config`'s "sandbox deployed ⇒ both secrets present" invariant stays **startup-only**, now with the reasoning recorded in its docstring rather than left open: for a process that got past the check there is nothing left at runtime to prevent, because an emptied `INTERNAL_API_SECRET` already 401s via the latch and an emptied signing key already rejects every sandbox token (this is not a claim that the bad state is unreachable in the abstract — a process started with *both* `INTERNAL_API_SECRET` and `SANDBOX_ENABLED` unset returns early, never latches, and would serve fail-open if `SANDBOX_ENABLED` later became true; what rules that out is the pod-spec argument below, not this one); its remedy (`sys.exit(1)`) is only correct at startup, where it stalls the rollout with the old pods serving, whereas from a request path it would let the one attacker-authored caller time a process kill; and `SANDBOX_ENABLED` comes from the pod spec, which cannot change without a new pod that re-runs the check. This was never a live vulnerability — the sandbox is not deployed (`SANDBOX_ENABLED` is `false` on both services), and the snapshot failed closed — it is the same order-dependence hazard, in the one credential path whose input is attacker-authored.
+
+`tests/conftest.py` additionally restores `INTERNAL_API_SECRET`/`SANDBOX_TOKEN_SIGNING_KEY`/`SANDBOX_ENABLED` around every test. That is a net, not the fix: the leak was `_reload` in `tests/test_sandbox_token_auth.py`, which popped those variables (and set `PROJECT_ID`) with nothing putting them back, and now routes them through `monkeypatch`. Since l7z all three are read at call time, so restoring all three is load-bearing rather than symmetric-looking — though only `INTERNAL_API_SECRET` can turn a leak into an authorization difference, the other two failing closed. `pytest-randomly` is now declared in `pyproject.toml`: it was present in the global pyenv interpreter but **not** in this project's `.venv`, so the shuffling that surfaced this was never part of the documented `uv pip install -e '.[dev]'` flow.
 
 This was the only access control besides the cluster NetworkPolicy, which is not sufficient on its own: mcp-server is allowed to reach db-api *and* is itself reachable from outside the boundary, so anything that could drive mcp-server could reach BigQuery through it.
 
@@ -544,8 +671,10 @@ Notes:
 
 #### Other controls
 
-- `maximum_bytes_billed` on every BigQuery job, including the internal ones behind `/schema`, `/stats` and `/tables/{name}/sample` (previously uncapped, so a large table could run up an unbounded scan)
-- Table names auto-qualified, and bare view names resolved via `_BASE_TABLES`
+- `maximum_bytes_billed` on every BigQuery job, including the internal ones behind `/schema`, `/stats` and `/tables/{name}/sample` (previously uncapped, so a large table could run up an unbounded scan). All four paths resolve the ceiling from the *requesting* caller's principal via `_caps_for()`, and the three internal ones share `_run_internal_query()`. `/schema`'s distinct-value scans used to pass no request at all and so ran at the operator ceiling — for a sandbox caller, twice its own per-query cap — and were charged to nobody
+- **The sandbox aggregate byte budget (`SANDBOX_AGGREGATE_BYTES_BUDGET`, 200 GB per `jti`) spans all four paths, not just `/query`.** `/query` charges the dry run's estimate before the job runs and reconciles afterwards to `total_bytes_processed`, refunding the whole estimate in a `finally` if the job raises before it can be reconciled. The three internal paths have no dry run to price them, so `_run_internal_query()` refuses to start a job once the budget is spent and charges what the job processed once it finishes; the budget can therefore be overshot by at most one query's `maximum_bytes_billed`, which is exactly what the per-query cap bounds. `total_bytes_processed` rather than `total_bytes_billed` because a dry run reports only the former, so it is the one figure available on both sides of the correction. Charging `/schema`'s scans to the triggering caller does not contaminate the shared `_get_categorical_values` cache across callers: a job over that caller's ceiling fails and leaves the cache unpopulated for the next caller to retry. The counter is in-process, so db-api's `replicas: 1` is load-bearing — see the comment in the suite repo's `k8s/deployments/db-api.yaml`
+- **Unqualified table names are resolved by BigQuery, not by db-api.** Both job configs on the `/query` path — the execution config and `authorize_query()`'s dry-run probe — carry `default_dataset = _DEFAULT_DATASET` (`{PROJECT_ID}.{DATASET_ID}`), so `FROM credible_sets_v` and `FROM datasets` resolve server-side. The two must stay identical: the allow-list is checked against the dry run, so a dry run that resolved a bare name differently from the execution would be a gate bypass. `referencedTables` still comes back **fully qualified** (`{projectId, datasetId, tableId}`) however a name was written, which is what makes `_ALLOWED_TABLE_IDS` independent of the caller's spelling; an explicitly qualified table outside the allow-list still resolves to itself and is still 403'd. A bare name absent from the default dataset is a dry-run `NotFound`, converted to a 400 alongside `BadRequest` — nothing executes.
+- **db-api no longer parses SQL, and must not start again.** It used to rewrite the caller's text: `_qualify_tables()` replaced a bare name after `FROM`/`JOIN` with the fully-qualified view, excluding names that `_cte_names()`' paren-depth scan believed a `WITH` clause had declared. That scan was a regex emulating SQL scoping, and three rounds each closed one lexical case and revealed the next, every one returning the **same silent wrong answer** — 889 rows of `datasets_v`, HTTP 200, where the caller asked for their one-row CTE: (1) a CTE aliased to a view or base-table name was rewritten; (2) a *backticked* CTE declaration was erased by the noise-blanking, so the scan saw no CTE; (3) BigQuery decodes escape sequences inside backtick-quoted identifiers, so `` WITH `\u0064atasets` AS (…) `` declares a CTE genuinely named `datasets` that no text match can find, while `` `a\`b` `` desynchronises backtick pairing and erases an arbitrary later span. The class was not exhausted and would not be, because the residuals are the difference between a regex and BigQuery's grammar. Deleting the rewrite deletes the whole class: `_qualify_tables`, `_cte_names`, `_SQL_NOISE`, `_IDENT_NOISE`, `_blank_noise`, `_CTE_SCAN`, `_QUALIFY_TARGETS` and the error hint that explained CTE shadowing are gone, along with the over-collecting residuals (`WINDOW w AS (…)`, `UNNEST(x) WITH OFFSET`, a backticked identifier containing `WITH`) they carried. A CTE now simply shadows, correctly, as in any SQL engine. Do not reintroduce a text rewrite as an optimisation. `_BASE_TABLES` survives for `/schema` and `/tables/{name}/sample` name lookups and for `_ALLOWED_TABLE_IDS`, not for rewriting. **One real behaviour change:** the rewrite used to turn `FROM credible_sets` into `credible_sets_v`, so a human writing a bare base-table name on `/query` now gets the base table — which is not column-identical to its view (`credible_sets_v` adds `maf` and reorders columns), so that query silently loses `maf`. The data is correct and the reach is unchanged (base tables were always allow-listed), and the MCP server is unaffected because it emits only `_v` names. The behaviour is pinned by `tests/test_query_name_resolution.py`, which asserts on the rows returned against a live BigQuery (set `LIVE_BQ_PROJECT_ID` / `LIVE_BQ_DATASET_ID`; the module skips otherwise), and — because this repo has no CI and those tests skip by default — by `tests/test_no_sql_rewriting.py`, which needs no BigQuery and asserts that none of the deleted helpers are back, that `/query` hands both the dry-run probe and the execution the caller's SQL byte for byte, and that the probe's `default_dataset` is taken from the caller's job config rather than a module constant
 - IAM-level read-only enforcement on the API service account (see IAM Roles below)
 
 ### IAM Roles
@@ -568,7 +697,7 @@ Configuration via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | PROJECT_ID | (from gcloud in the scripts; a placeholder in the API) | GCP project ID — the API's fallback is not a real project, so it must be set in a deployment |
-| DATASET_ID | genetics_results | BigQuery dataset name |
+| DATASET_ID | genetics_results | BigQuery dataset name — **the default is production**; see "Dev dataset" below |
 | LOCATION | europe-west1 | BigQuery dataset location |
 | MAX_ROWS | 100000 | Maximum rows returned per query |
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
@@ -577,6 +706,72 @@ Configuration via environment variables:
 | GCS_BUCKET / GCS_PREFIX | varies by loader (placeholder `bucket-name` with an empty prefix in most, `finngen-commons` + `results_api_data/` in the newer ones) | GCS source location for `scripts/load_*.sh` |
 | CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
 | INTERNAL_API_SECRET | (unset) | Shared secret required as `Authorization: Bearer` on every endpoint except `/health`. Unset disables authentication entirely (logs a warning at startup) |
+
+### Dev dataset
+
+`DATASET_ID` is the only *setting* in the suite that selects a dataset, and its default is
+the production one. A local stack started without it queries
+`phewas-development.genetics_results` — chat-api and the browser BFF have no dataset
+setting of their own, they reach BigQuery only through this API, so the single variable
+switches the entire chain.
+
+It does **not** follow that no other service mentions a dataset name. Grepping the sibling
+repos: `genetics-results-api` and `genetics-results-browser` contain no BigQuery dataset
+name (their `dataset_id` fields are registry keys from `datasets.yaml`, a different thing),
+but `genetics-mcp-server` hardcodes `genetics_results.<view>` throughout — in the typed
+tools' generated SQL (`tools/executor.py`), in the `run_sql` tool description, and in the
+schema docs it ships. Those queries reach BigQuery through this API, so pointing it at
+`genetics_dev` does not redirect them: `authorize_query` builds `_ALLOWED_TABLE_IDS` from
+`DATASET_ID`, the dry run resolves `genetics_results.<view>` against the default project,
+and the request is rejected **403** as referencing tables outside the exposed set. It fails
+closed — an MCP client cannot reach production through a dev-pointed API — but MCP custom
+SQL and typed tools do not work against `genetics_dev` without changing the MCP server.
+
+| | |
+|---|---|
+| Dev dataset | `phewas-development:genetics_dev`, location `europe-west1` |
+| How to select it | `DATASET_ID=genetics_dev` in the environment that starts `api/main.py` |
+| Schema | complete — all 15 tables and all 15 views, created by `scripts/setup_bigquery.sh` from `schemas/` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly |
+| Data | ~3.6M rows / ~612 MB, against production's ~1.1B rows / ~224 GB |
+
+The location must be the **region** `europe-west1`, matching the production datasets, not
+the GKE zone `europe-west1-b`. A dataset's location cannot be altered after creation, and
+a query joining datasets in different locations fails outright.
+
+The subset is **chromosome 22 for the results tables**, capped at 500k rows for
+`gene_burden_results` and `open_chromatin`, plus complete copies of `datasets`,
+`phenotypes`, `gene_annotations` and `hla_associations` — the registry tables because any
+subset of them makes dev misleading, and HLA because it is chromosome 6 by construction and
+a chr22 filter would empty it. Every view returns rows.
+
+The coloc triple is **not** capped blindly, because it is the one group where a missing row
+misleads rather than merely thins. `coloc_credsets` is seeded from the credible-set IDs the
+loaded `colocalization` rows actually reference (every `cs1_id` and `cs2_id`), and
+`credible_sets` holds its chr22 slice **plus** every row for that same ID set. So both
+directions of the pivot resolve: all 41,131 `colocalization_v` rows resolve both `cs1_id`
+and `cs2_id` in `coloc_credsets_v`.
+
+Three consequences worth stating, because all three are silent:
+
+- A 500k-row cap takes an arbitrary slice, so cross-table results for the two capped tables
+  are thinner than production's; absence of a row in dev is not evidence.
+- The `credible_sets` ↔ `coloc_credsets` `cs_id` overlap is small (518 of the 3,908 IDs the
+  coloc slice references) — but that is production's own overlap for these IDs, not a dev
+  artifact. Seeding cannot raise it.
+- Row counts and query timings here mean nothing for capacity or cost work. Benchmarks
+  belong against production-scale data.
+
+`genetics_dev` was populated by `INSERT INTO genetics_dev.<table> (cols) SELECT cols FROM
+genetics_results.<table> WHERE chr = 22`, reading production rather than re-running the
+GCS loaders, which have no subsetting mechanism and would have loaded all ~224 GB
+(`coloc_credsets` and `credible_sets` use the `cs_id` seed described above instead of the
+`chr = 22` filter, reloaded with `TRUNCATE TABLE` + `INSERT` — never `CREATE OR REPLACE
+TABLE AS SELECT`, which flattens every column to NULLABLE and would drop the partitioning
+and clustering). One
+table needs its production **view** as the source instead: `genetics_results.credible_sets`
+predates the clustering swap and stores neither `resource` nor `variant`, while the schema
+in `schemas/credible_sets.sql` clusters on both, so only `credible_sets_v` exposes the full
+dev column set. Reloading the dev dataset from scratch costs about $0.01 and two minutes.
 
 CORS responses cannot use a wildcard origin: the API is configured with
 `allow_credentials=True`, and browsers reject `Access-Control-Allow-Origin: *` on
@@ -612,7 +807,11 @@ genetics-results-db/
 │   ├── hla_associations.sql           # Classical HLA allele associations (FinnGen R14; allele-keyed, no ref/alt)
 │   ├── hla_associations_v.sql         # View with resource column (mapped to 'finngen')
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
-│   └── variant_annotation_v.sql       # View with constant resource='finngen'
+│   ├── variant_annotation_v.sql       # View with constant resource='finngen'
+│   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
+│   ├── phenotypes_v.sql               # Pass-through view (resource is a registry column)
+│   ├── datasets.sql                   # Dataset registry keyed by results-view `dataset`
+│   └── datasets_v.sql                 # Pass-through view (resource is a registry column)
 ├── scripts/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
@@ -631,6 +830,9 @@ genetics-results-db/
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
+│   ├── load_phenotypes.sh         # Build + load phenotypes and datasets metadata tables (WRITE_TRUNCATE)
+│   ├── live_dataset_scope.py      # Derives the registry cross-check scope from api/main.py's VIEWS
+│   ├── build_phenotypes.py        # Build phenotypes/datasets NDJSON from datasets.yaml + its metadata_file sources
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
 │   └── datasets.yaml          # Shared dataset/resource config — generated, gitignored;
@@ -752,6 +954,31 @@ genetics-results-db/
     Reads `gs://<bucket>/<prefix>mpra/siraj_mpra/siraj_mpra.tsv.gz` and injects `dataset=siraj_mpra`, since — unlike the open-chromatin and variant-effect files — the MPRA LONG file has no `dataset` column.
 
 These four loaders default `GCS_BUCKET` to the placeholder `bucket-name`, so set `GCS_BUCKET` (and `GCS_PREFIX`, e.g. `results_api_data/` for finngen-commons, empty for the daly layout) explicitly.
+
+13. **Build and load the phenotype/dataset metadata tables** (full rebuild via `WRITE_TRUNCATE`):
+    ```bash
+    PROFILE=finngen ./scripts/load_phenotypes.sh
+    ```
+    `build_phenotypes.py` reads the synced `configs/datasets.yaml` and every `metadata_file` it references from GCS, harmonizes them (mirroring genetics-results-api's `MetadataHarmonizer`), and writes two NEWLINE_DELIMITED_JSON files that `load_data.py` loads. **Re-run after any change to `datasets.yaml` or a metadata file** — nothing else propagates registry edits into BigQuery.
+
+    `PROFILE` selects both the dataset registry and, through the registry's `metadata_file` URIs, the bucket the metadata is read from; `GCS_BUCKET`/`GCS_PREFIX` only control where the generated NDJSON is staged (default `finngen-commons` / `results_api_data/mapping_files/`).
+
+    The builder owns `BQ_DATASETS_BY_DATASET_ID`, the registry-key → results-view-`dataset` map. That value is baked into the source credible-set TSVs by genetics-results-munge and `datasets.yaml` never records it, so **a new dataset must be added there** or it gets a `datasets` row with `dataset = NULL` and no `phenotypes` rows. The loader cross-checks the map against the live views in **all** directions, and any mismatch **fails the build**:
+
+- a live `dataset` value with no registry entry,
+- a registry claim that no results table contains,
+- a `phenotypes` row keyed on a `dataset` no results table contains,
+- a name in `ABSENT_FROM_RESULTS` that has since become live.
+
+The **scope** of that cross-check is derived, not listed. `scripts/live_dataset_scope.py` parses the `VIEWS` list out of `api/main.py` (with `ast`, and strictly: if `VIEWS` is assembled rather than written as one list literal — `+ EXTRA`, `.append()`, `+=`, a rebind — the parse **fails** instead of returning the literal's short prefix, because a short list yields valid SQL over fewer views and hides the rest), reads `INFORMATION_SCHEMA.COLUMNS` for the `dataset` / `dataset1` / `dataset2` columns, and generates the `UNION ALL` the loader runs. Anything the API exposes is therefore in scope automatically: a newly added view puts its `dataset` values in front of the check the moment it is exposed, and an unmapped value fails the build. The earlier version unioned nine hardcoded table names, which meant a brand-new table contributed nothing and its drift could not be detected — the check failed *open* for exactly the case where drift is most likely. That is how `hla_associations` reached BigQuery with a `datasets` table holding zero `finngen_hla` rows while this loader reported success.
+
+Views leave that scope only through `live_dataset_scope.EXCLUDED_VIEWS`, which stores a reason per entry: `gene_annotations_v` and `variant_annotation_v` are reference tables with no `dataset` column, and `phenotypes_v` / `datasets_v` are built *from* the map under test, so including them would make the check confirm itself. A view that is neither excluded nor has a dataset-bearing column **fails loudly** — being skipped for a missing column is the same fail-open trap one level down. (`peak_to_gene_v` is deliberately *not* excluded: contrary to an earlier note here it does carry a `dataset` column, a constant `FinnGen_ATACseq`, and including it costs nothing.)
+
+If the cross-check query itself returns nothing (bad auth, quota, a renamed view) the loader **refuses to run** rather than loading unvalidated; `ALLOW_UNVALIDATED=1` overrides both that and the mismatch failures.
+
+`hla_associations` names its trait column **`phenotype`** — a third spelling alongside `trait` and `trait_original`. Its 2,712 codes are the FinnGen R14 endpoint codes, but `finngen_hla` still gets its own `phenotypes` rows rather than borrowing `FinnGen_R14`'s: the table is keyed on `(dataset, trait_original)` so that every results-view `dataset` resolves its own names with one uniform join, and `FinnGen_R12` already duplicates 2,315 of R14's codes for the same reason. The join is `p.dataset = 'finngen_hla' AND p.trait_original = h.phenotype`.
+
+`build_phenotypes.ABSENT_FROM_RESULTS` records the names deliberately mapped but absent from BigQuery — today `IIBDGC` (registered, credible sets not loaded) and six eQTL Catalogue sub-studies (`QTD000736`, `QTD000863`, `QTD000865`, `QTD000869`, `QTD000910`, `QTD000915`) that are in the collection metadata but not in the imported release. They are emitted with `dataset = NULL` and contribute no `phenotypes` rows, so nothing points at an empty result.
 
 ### API deployment
 

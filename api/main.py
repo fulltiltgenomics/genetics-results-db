@@ -8,7 +8,10 @@ import json
 import os
 import logging
 import sys
+import threading
 import time
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,7 +21,12 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from google.cloud import bigquery
-from google.api_core.exceptions import BadRequest, Forbidden
+from google.api_core.exceptions import BadRequest, Forbidden, NotFound
+
+try:  # packaged as `api.` in the image, run as a bare module in some scripts
+    from api import sandbox_auth
+except ImportError:  # pragma: no cover
+    import sandbox_auth
 
 
 class _GCPJsonFormatter(logging.Formatter):
@@ -62,38 +70,238 @@ logger = logging.getLogger(__name__)
 for _name in ("uvicorn.access", "google", "urllib3", "asyncio"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
-INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
+
+# the service discriminator in the shared endpoint_access sink, where db-api's rows sit beside
+# results-api's. Constant and not env-derived on purpose: every previous candidate for this job
+# was something that moves. `endpoint_path IS NULL` worked only while db-api emitted no path, and
+# LOG_SOURCE below is derived from the environment, carries no service name and has already been
+# renamed once in production (genetics-results-api-prod -> finngenie_prod). A discriminator that
+# can be renamed by a deploy is not a discriminator; this one can only change by editing this line.
+SERVICE = "db-api"
+
+# which *environment* wrote the row — deliberately a separate axis from SERVICE above
+LOG_SOURCE = os.environ.get("LOG_SOURCE", "genetics_db_api_prod")
 
 # kubelet probes and the monitor CronJob poll /health with no credentials
 _UNAUTHENTICATED_PATHS = {"/health"}
 
+# marks a request verified by the shared secret; the sandbox path leaves a SandboxPrincipal
+_INTERNAL_PRINCIPAL = "internal"
+
 
 def require_auth(request: Request) -> None:
-    """Require the shared internal secret on every endpoint except /health.
+    """Authenticate the caller: a sandbox execution token, or the shared internal secret.
 
-    This service has no user-facing identity: its only callers are chat-backend and
-    mcp-server, which already send `Authorization: Bearer $INTERNAL_API_SECRET` on every
-    request. Before this the sole control was the cluster NetworkPolicy, and mcp-server sits
-    on both sides of that boundary — anything able to reach mcp-server could reach BigQuery
-    through it.
+    The shared-secret path serves chat-backend and mcp-server, which already send
+    `Authorization: Bearer $INTERNAL_API_SECRET` on every request. Before this the sole
+    control was the cluster NetworkPolicy, and mcp-server sits on both sides of that boundary
+    — anything able to reach mcp-server could reach BigQuery through it. That path
+    deliberately fails open when the secret is unset, so a cluster that has not yet wired the
+    env var keeps serving rather than hard-failing mid-rollout.
 
-    Deliberately fails open when the secret is unset, so a cluster that has not yet wired the
-    env var keeps serving rather than hard-failing mid-rollout. The startup warning below is
-    the signal that an instance is running unprotected.
+    The sandbox path does **not** inherit that. A sandbox-shaped bearer (JOSE `alg: HS256`,
+    see sandbox_auth) is routed to the sandbox validator *before* the unset-secret early
+    return can short-circuit it, and a failure there is a hard 401 — never a fallthrough to
+    the shared-secret comparison, which would degrade a malformed token into "is this string
+    equal to the secret". The sandbox is the one caller whose input is attacker-authored.
+
+    The resolved principal is left on `request.state.principal` (None for the fail-open and
+    /health cases) so handlers can key per-credential behaviour on it.
     """
-    if not INTERNAL_API_SECRET or request.url.path in _UNAUTHENTICATED_PATHS:
+    request.state.principal = None
+    if request.url.path in _UNAUTHENTICATED_PATHS:
         return
+
     auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+
+    if token and sandbox_auth.is_sandbox_shaped(token):
+        try:
+            principal = sandbox_auth.verify_sandbox_token(token)
+        except sandbox_auth.SandboxTokenError as exc:
+            logger.warning({
+                "message": "sandbox token rejected",
+                "log_type": "endpoint_access",
+                "service": SERVICE,
+                "log_source": LOG_SOURCE,
+                "endpoint_path": request.url.path,
+                "http_method": request.method,
+                "reason": str(exc),
+            })
+            raise HTTPException(status_code=401, detail="Unauthorized") from None
+        request.state.principal = principal
+        logger.info({
+            "message": "sandbox request authorized",
+            "log_type": "endpoint_access",
+            "service": SERVICE,
+            "log_source": LOG_SOURCE,
+            "endpoint_path": request.url.path,
+            "http_method": request.method,
+            "principal": "sandbox",
+            "sub": principal.user,
+            "sid": principal.session_id,
+            "jti": principal.execution_id,
+        })
+        return
+
+    secret = _internal_api_secret()
+    if secret is None:
+        # nothing to compare against that this process is willing to trust — refuse rather than
+        # fall through to the fail-open return below. See `_internal_api_secret`.
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not secret:
+        return
+    # compare as bytes: compare_digest on str raises TypeError for non-ASCII, which would
+    # surface as a 500 instead of failing closed with a 401.
+    #
+    # The two codecs differ on purpose — do not "fix" the latin-1 one to utf-8. Starlette
+    # decodes raw header bytes as latin-1, so re-encoding the presented token with latin-1
+    # undoes that decode exactly; utf-8 would re-encode the mojibake instead (b"s\xc3\xa9cret"
+    # comes back out as b"s\xc3\x83\xc2\xa9cret").
+    #
+    # It does NOT recover "the bytes the client sent" in general: measured off a real socket
+    # the clients disagree with each other — node fetch/undici and python-requests put latin-1
+    # on the wire, aiohttp puts utf-8, and httpx 0.28 refuses to send a non-ASCII header value
+    # at all. No codec is right for all of them, so under a hypothetical non-ASCII secret this
+    # pairing would favour the aiohttp-shaped caller and 401 the others. What makes the
+    # comparison well defined is `_require_ascii_secret` below, which refuses a non-ASCII
+    # secret at startup; every codec coincides on ASCII, which is what deployments have.
+    #
+    # No try/except on the re-encode, unlike results-api's: this takes a starlette Request, so
+    # the only str it can see came from starlette's own latin-1 decode and re-encodes by
+    # construction. Add the guard if a str-taking entry point is ever introduced here.
     if not auth_header.startswith("Bearer ") or not hmac.compare_digest(
-        auth_header[7:], INTERNAL_API_SECRET
+        token.encode("latin-1"), secret.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    request.state.principal = _INTERNAL_PRINCIPAL
 
 
-if not INTERNAL_API_SECRET:
+def _access_log_fields(
+    request: Request | None, endpoint_path: str, http_method: str
+) -> dict[str, Any]:
+    """The fields every db-api `endpoint_access` line shares with results-api's.
+
+    There is deliberately no `user_email`: db-api sits behind results-api and the internal
+    secret rather than in front of users, so its caller is a *service*, not a person. The only
+    principal that exists here is the credential that authorized the call, which is what
+    `principal` records — inventing a user_email would misrepresent it.
+    """
+    principal = getattr(request.state, "principal", None) if request is not None else None
+    if isinstance(principal, sandbox_auth.SandboxPrincipal):
+        principal_name = "sandbox"
+    elif principal == _INTERNAL_PRINCIPAL:
+        principal_name = _INTERNAL_PRINCIPAL
+    else:
+        # the fail-open branch: INTERNAL_API_SECRET unset, so nothing was verified
+        principal_name = "unauthenticated"
+    return {
+        "log_type": "endpoint_access",
+        "service": SERVICE,
+        "log_source": LOG_SOURCE,
+        "endpoint_path": endpoint_path,
+        "http_method": http_method,
+        "principal": principal_name,
+    }
+
+
+def _require_ascii_secret(secret: str) -> None:
+    """Refuse a non-ASCII INTERNAL_API_SECRET (`genetics-results-suite-ctq`).
+
+    HTTP clients do not agree on how to put a non-ASCII header value on the wire — node
+    fetch/undici and python-requests send latin-1, aiohttp sends utf-8, httpx refuses to send
+    one at all — so no server-side codec can recover the same secret from every caller and
+    byte-exactness is unachievable in general. The ASCII invariant is what makes `require_auth`
+    well defined, so it is enforced here rather than merely written down.
+
+    Failing at startup is the good failure mode: the pod never passes readiness, the rollout
+    stalls with the old pods still serving, and the message names the variable — versus every
+    internal call 401ing at request time with nothing local saying why.
+
+    Silent when the secret is absent or empty: that is the dev/test configuration, and the
+    fail-open branch of `require_auth` (warned about below) already covers it.
+    """
+    if secret and not secret.isascii():
+        raise RuntimeError(
+            "INTERNAL_API_SECRET contains non-ASCII characters. HTTP clients disagree on how "
+            "to encode a non-ASCII header value (node/undici and python-requests send latin-1, "
+            "aiohttp sends utf-8, httpx refuses to send one at all), so no server-side decoding "
+            "recovers the same secret from every caller. Set INTERNAL_API_SECRET to an ASCII "
+            "value — scripts/create-secrets.sh generates one with `openssl rand -base64 32`."
+        )
+
+
+# set once this process has observed a usable secret, and never cleared. See the asymmetry
+# note in `_internal_api_secret`, which is the only thing that reads or writes it.
+_authentication_was_configured = False
+
+
+def _internal_api_secret() -> str | None:
+    """The shared secret `require_auth` compares against, read fresh — or None to refuse.
+
+    Returns a non-empty str to authenticate against; `""` when no secret is configured and none
+    ever was in this process, which is the documented fail-open dev shape; and **None when the
+    request must be refused** (401). It never raises: a RuntimeError out of here would leave a
+    FastAPI dependency 500ing *every* call, including one presenting the correct credential, on
+    a pod kubelet keeps Ready because `/health` returns before the read.
+
+    Read per request rather than snapshotted at import (`genetics-results-suite-xi6`). The
+    snapshot was global state fixed by whoever imported this module first: pytest imports every
+    test module at COLLECTION time, before any fixture sets the variable, so which tests ran
+    first decided whether authentication ran at all — at `--randomly-seed=2662673150` the
+    secret froze to "", require_auth took its fail-open branch, and the nine auth tests that
+    assert 401 got 200 and **failed** (a seed-dependent red suite, not a silent green one). The
+    hazard is the order-dependence itself: a shuffled run going red for reasons unrelated to
+    the change under test, and any future module-scope `import api.main` freezing the secret
+    for an unrelated test file.
+
+    Reading and validating in the SAME accessor is the point, not incidental: `_require_ascii_secret`
+    used to validate the import-time snapshot only, so a request-time read past it could compare
+    against a value that was never checked — and ASCII is exactly the invariant that makes the
+    `latin-1` vs `utf-8` pairing in `require_auth` well defined. There is no way to obtain the
+    secret except through here, so the value compared is the value validated.
+    """
+    global _authentication_was_configured
+
+    secret = os.environ.get("INTERNAL_API_SECRET", "")
+
+    if secret and not secret.isascii():
+        # startup already refused this value, so getting here means the variable changed under
+        # a live process — impossible for a pod, whose environ is immutable. Fail closed: see
+        # the "never raises" paragraph above for why this is not `_require_ascii_secret(secret)`
+        return None
+
+    if secret:
+        _authentication_was_configured = True
+        return secret
+
+    # THE ASYMMETRY IS THE POINT — do not "simplify" this to `return secret`.
+    # A runtime change may ENABLE authentication (empty -> set, which is what makes the
+    # collection-order hazard above unreachable) but must never DISABLE it. Under the old module
+    # global no in-process mutation could turn a secret-set app into a fail-open one, because the
+    # app held its own copy; a plain per-request read would hand that away, so that deleting or
+    # emptying the variable admitted every caller with principal=None. Once this process has
+    # observed a secret, an absent one is a fail-CLOSED condition. Pinned by
+    # tests/test_secret_read_timing.py::test_a_configured_process_never_fails_open_afterwards.
+    return None if _authentication_was_configured else ""
+
+
+_startup_secret = os.environ.get("INTERNAL_API_SECRET", "")
+
+# fail fast at import: the environment does not change under a running pod, so this is where a
+# non-ASCII secret crashes the process (readiness never passes, the rollout stalls, the old pods
+# keep serving) rather than at request time, where the accessor above fails closed instead
+_require_ascii_secret(_startup_secret)
+
+_authentication_was_configured = bool(_startup_secret)
+
+if not _startup_secret:
     logger.warning(
         "INTERNAL_API_SECRET is not set: every endpoint is reachable without authentication"
     )
+
+# refuses to start rather than warn when the sandbox is deployed and either secret is missing
+sandbox_auth.require_sandbox_config(_startup_secret)
 
 app = FastAPI(
     title="Genetics Results API",
@@ -148,21 +356,176 @@ DATASET_ID = os.environ.get("DATASET_ID", "genetics_results")
 MAX_ROWS = int(os.environ.get("MAX_ROWS", "100000"))
 MAX_BYTES_BILLED = int(os.environ.get("MAX_BYTES_BILLED", str(100 * 1024**3)))  # 100 GB default
 
+# Defaults for every request, per docs/code-execution-security.md section 4. The operator
+# values above are the *relaxed* case, reached only by a request verified against
+# INTERNAL_API_SECRET — so no caller can obtain looser limits by presenting a weaker
+# credential, or none at all.
+SANDBOX_MAX_ROWS = 25_000
+SANDBOX_MAX_BYTES_BILLED = 50 * 1024**3
+# aggregate across every BigQuery job of one execution (`jti`) — /query plus the service's own
+# scans on /schema, /stats and /tables/{t}/sample, none of which is cached at the HTTP layer;
+# the per-query cap alone bounds one query against a caller that has 120 seconds in which to loop
+SANDBOX_AGGREGATE_BYTES_BUDGET = 200 * 1024**3
+# bound on the counter itself, so a flood of distinct `jti`s cannot grow it without limit
+_JTI_BUDGET_LRU_SIZE = 1024
+
 bq_client = bigquery.Client(project=PROJECT_ID)
 
 
-def _internal_job_config() -> bigquery.QueryJobConfig:
-    """Cost cap for the service's own queries (/schema, /stats, /tables/{t}/sample).
+@dataclass(frozen=True)
+class _Caps:
+    """Resolved per-credential limits for one request."""
 
-    Only /query used to carry maximum_bytes_billed, so the endpoints that scan whole
-    views on a cache miss were uncapped and could be driven in a loop.
+    max_rows: int
+    max_bytes_billed: int
+    # set only for a sandbox execution — the key of the aggregate budget below
+    jti: str | None
+
+
+_RELAXED_CAPS = _Caps(MAX_ROWS, MAX_BYTES_BILLED, None)
+
+
+def _caps_for(request: Request | None) -> _Caps:
+    """The limits this request runs under, keyed on the principal `require_auth` resolved.
+
+    Tight by default. Relaxed only for `_INTERNAL_PRINCIPAL`, i.e. a successful
+    `hmac.compare_digest` against `INTERNAL_API_SECRET` — db-api has no other caller and no
+    other auth path. `None` (the fail-open branch when the secret is unset) stays tight: a
+    deployment that has not wired the secret keeps serving, but at sandbox limits rather than
+    at the operator's.
+
+    That is a behaviour change for an unwired deployment. The three internal query paths —
+    `/schema`'s distinct-value scans, `/stats`, and `/tables/{t}/sample` — used to run under
+    the deleted `_internal_job_config()` at `MAX_BYTES_BILLED`; with the secret unset they now
+    run at `SANDBOX_MAX_BYTES_BILLED` (50 GB). Production is unaffected, since the secret is a
+    required `secretKeyRef` in `k8s/deployments/db-api.yaml`, but local dev and an unwired
+    cluster get the tighter ceiling, and raising `MAX_BYTES_BILLED` there will not make
+    `/schema` benefit.
     """
-    return bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_BILLED)
+    principal = getattr(request.state, "principal", None) if request is not None else None
+    if principal == _INTERNAL_PRINCIPAL:
+        return _RELAXED_CAPS
+    jti = principal.execution_id if isinstance(principal, sandbox_auth.SandboxPrincipal) else None
+    return _Caps(SANDBOX_MAX_ROWS, SANDBOX_MAX_BYTES_BILLED, jti)
+
+
+# in-process, bounded LRU: {jti -> bytes *processed* so far}. Processed, not billed: a dry run
+# reports only `total_bytes_processed` (`total_bytes_billed` is 0 on a dry-run job), so it is the
+# only figure available on both sides of the pre-flight charge and its reconcile — charging one
+# unit and reconciling in the other would make the correction wrong by construction. The two
+# differ only by BigQuery's 10 MB minimum and its round-up, immaterial against a 200 GB budget.
+_jti_bytes: "OrderedDict[str, int]" = OrderedDict()
+_jti_bytes_lock = threading.Lock()
+
+
+def _charge_aggregate(jti: str, additional: int) -> tuple[bool, int]:
+    """Charge `additional` bytes to `jti`'s running total.
+
+    Returns `(allowed, total)`. When the charge would exceed the budget nothing is charged
+    and `allowed` is False — the caller must turn that into a 429, never a truncated result.
+    """
+    with _jti_bytes_lock:
+        current = _jti_bytes.get(jti, 0)
+        allowed = current + additional <= SANDBOX_AGGREGATE_BYTES_BUDGET
+        _jti_bytes[jti] = current + additional if allowed else current
+        _jti_bytes.move_to_end(jti)
+        # trimmed on both branches: the reject path also inserts (a 0-valued entry for a `jti`
+        # that never spent anything), so trimming only when allowed leaves the bound unreal
+        while len(_jti_bytes) > _JTI_BUDGET_LRU_SIZE:
+            _jti_bytes.popitem(last=False)
+        return allowed, _jti_bytes.get(jti, current)
+
+
+def _charge_aggregate_spent(jti: str, spent: int) -> None:
+    """Add bytes a job has *already* billed to `jti`'s running total.
+
+    Unconditional, unlike `_charge_aggregate`: the bytes are gone either way, so refusing the
+    charge would only lose the accounting. Used by the paths that have no dry run to price the
+    statement with (see `_run_internal_query`).
+    """
+    if spent <= 0:
+        return
+    with _jti_bytes_lock:
+        _jti_bytes[jti] = _jti_bytes.get(jti, 0) + spent
+        _jti_bytes.move_to_end(jti)
+        while len(_jti_bytes) > _JTI_BUDGET_LRU_SIZE:
+            _jti_bytes.popitem(last=False)
+
+
+def _aggregate_spent(jti: str) -> int:
+    with _jti_bytes_lock:
+        return _jti_bytes.get(jti, 0)
+
+
+def _reconcile_aggregate(jti: str, delta: int) -> None:
+    """Correct a charge after the fact: the pre-flight charge uses the dry run's estimate, and the
+    executed job can process less (a cache hit) or more than that estimate. A negative `delta`
+    equal to the whole estimate is the refund for a query that raised before it ran."""
+    if delta == 0:
+        return
+    with _jti_bytes_lock:
+        if jti in _jti_bytes:
+            _jti_bytes[jti] = max(0, _jti_bytes[jti] + delta)
+
+
+def _aggregate_budget_exceeded(jti: str, requested: int, spent: int) -> HTTPException:
+    logger.warning({
+        "message": "sandbox aggregate byte budget exceeded",
+        "log_type": "endpoint_access",
+        "jti": jti,
+        "bytes_spent": spent,
+        "bytes_requested": requested,
+        "budget": SANDBOX_AGGREGATE_BYTES_BUDGET,
+    })
+    return HTTPException(
+        status_code=429,
+        detail=(
+            f"Aggregate BigQuery byte budget for this execution exhausted: "
+            f"{spent} of {SANDBOX_AGGREGATE_BYTES_BUDGET} bytes already processed, this query "
+            f"needs a further {requested}. Narrow the query or aggregate in fewer scans."
+        ),
+    )
+
+
+def _run_internal_query(sql: str, caps: _Caps) -> "bigquery.QueryJob":
+    """Run one of the service's own queries (/schema, /stats, /tables/{t}/sample) under `caps`.
+
+    Only /query used to carry `maximum_bytes_billed` and only /query charged the aggregate
+    budget, so the endpoints that scan whole views on a cache miss were both uncapped and free
+    — and none of them is cached at the HTTP layer, so a script could loop them for its whole
+    wall clock outside the budget the constant claims to be an aggregate over every query of
+    one execution.
+
+    These paths have no dry run to price the statement with, so the budget is checked before
+    the job starts and the bytes it processed are charged after it finishes. Post-hoc charging
+    means the budget can be overshot by at most one query — and by at most that query's
+    `maximum_bytes_billed`, which is exactly what the per-query cap bounds.
+
+    `caps` is the *triggering* caller's, including on the shared `_get_categorical_values`
+    cache: a per-credential ceiling there decides only who pays and how much this job may
+    bill, never what a later caller finds cached. A job over the triggering caller's ceiling
+    fails and leaves the cache unpopulated, so the next caller simply retries under its own.
+    """
+    if caps.jti is not None:
+        spent = _aggregate_spent(caps.jti)
+        if spent >= SANDBOX_AGGREGATE_BYTES_BUDGET:
+            raise _aggregate_budget_exceeded(caps.jti, 0, spent)
+
+    job = bq_client.query(
+        sql, job_config=bigquery.QueryJobConfig(maximum_bytes_billed=caps.max_bytes_billed)
+    )
+    job.result()
+    if caps.jti is not None:
+        _charge_aggregate_spent(caps.jti, job.total_bytes_processed or 0)
+    return job
 
 # expose views (not underlying tables) so AI agents use the enriched schemas
-VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "asm_qtl_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "mpra_v", "variant_annotation_v", "peak_to_gene_v", "hla_associations_v"]
-# map base table names to views for backwards-compatible query auto-qualification
+VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "asm_qtl_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "mpra_v", "variant_annotation_v", "peak_to_gene_v", "hla_associations_v", "phenotypes_v", "datasets_v"]
+# base table -> view. The aliasing applies only to the /schema and /tables/{name}/sample name
+# lookups; on /query a bare `credible_sets` is resolved by BigQuery to the base table itself,
+# not to `credible_sets_v`. These names are also allow-listed for /query, as they always were.
 _BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
+
 
 # load all metadata from shared datasets.yaml (single source of truth)
 try:
@@ -203,12 +566,16 @@ _DERIVED_COLUMN_MODES = {
 }
 
 
-def _get_categorical_values(view_name: str) -> dict[str, Any]:
+def _get_categorical_values(view_name: str, caps: _Caps) -> dict[str, Any]:
     """Return distinct values for a view's categorical columns.
 
     Result keys are either the column name (flat list of allowed values) or
     `<col>_by_<dep>` (mapping from dependency value to allowed values). Cached
     in-process for `_VALUES_CACHE_TTL_SECONDS` to keep `/schema` cheap.
+
+    On a cache miss the full-column scans below run under the *triggering* caller's `caps`
+    and are charged to it — see `_run_internal_query` for why that does not let one caller's
+    ceiling decide what a later caller finds cached.
     """
     config = _CATEGORICAL_COLUMNS.get(view_name)
     if not config:
@@ -229,9 +596,11 @@ def _get_categorical_values(view_name: str) -> dict[str, Any]:
         agg = ", ".join(f"ARRAY_AGG(DISTINCT {c} IGNORE NULLS) AS {c}" for c in flat_cols)
         sql = f"SELECT {agg} FROM {fq}"
         try:
-            row = next(iter(bq_client.query(sql, job_config=_internal_job_config()).result()))
+            row = next(iter(_run_internal_query(sql, caps).result()))
             for c in flat_cols:
                 result[c] = sorted(row[c] or [])
+        except HTTPException:
+            raise  # an exhausted aggregate budget is the caller's answer, not a warning
         except Exception as e:
             logger.warning(f"Distinct value fetch failed for {view_name}: {e}")
 
@@ -243,10 +612,12 @@ def _get_categorical_values(view_name: str) -> dict[str, Any]:
         agg = ", ".join(f"ARRAY_AGG(DISTINCT {c} IGNORE NULLS) AS {c}" for c in cols)
         sql = f"SELECT {dep}, {agg} FROM {fq} WHERE {dep} IS NOT NULL GROUP BY {dep}"
         try:
-            for row in bq_client.query(sql, job_config=_internal_job_config()).result():
+            for row in _run_internal_query(sql, caps).result():
                 key = row[dep]
                 for c in cols:
                     result.setdefault(f"{c}_by_{dep}", {})[key] = sorted(row[c] or [])
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning(f"Grouped distinct value fetch failed for {view_name}.{dep}: {e}")
 
@@ -360,6 +731,12 @@ def _estimate_bq_cost(bytes_processed: int) -> float:
     return round((bytes_processed / (1024**4)) * 6.25, 6)
 
 
+# the dataset BigQuery resolves unqualified names against, so callers may write
+# `FROM credible_sets_v`. It must be identical on the dry-run and execution job configs:
+# a dry run that resolves a bare name to a different table than the execution would is a
+# gate bypass, since the allow-list is checked against the dry run's referencedTables.
+_DEFAULT_DATASET = f"{PROJECT_ID}.{DATASET_ID}"
+
 # tables a caller may reference: the exposed views plus the base tables they wrap
 # (BigQuery may report either in a dry run's referencedTables for a view query).
 _ALLOWED_TABLE_IDS = {
@@ -378,15 +755,27 @@ def authorize_query(sql: str, job_config: bigquery.QueryJobConfig) -> "bigquery.
     BigQuery itself parses the statement here, so there is no pattern to evade: the
     dry run reports the real statement type and the real set of referenced tables.
     Returns the completed dry-run job so the caller can reuse its cost estimate.
+
+    `default_dataset` mirrors the caller's execution config exactly, so the statement the
+    dry run parses is the one that will run. `referencedTables` still comes back fully
+    qualified whether a name was written bare or qualified, which is what makes the
+    allow-list comparison below independent of how the caller spelled it.
     """
     dry_config = bigquery.QueryJobConfig(
         maximum_bytes_billed=job_config.maximum_bytes_billed,
         dry_run=True,
         use_query_cache=False,
+        default_dataset=job_config.default_dataset,
     )
     try:
         probe = bq_client.query(sql, job_config=dry_config)
-    except BadRequest as e:
+    except (BadRequest, NotFound) as e:
+        # NotFound is how an unresolvable name now arrives. Before `default_dataset`, a bare
+        # unknown name could not resolve at all and came back as a BadRequest ("must be
+        # qualified"); resolved against the default dataset it is a well-formed reference to
+        # a table that does not exist, which is a 404 from the jobs API. Both mean the
+        # statement was rejected before anything ran, so both are the caller's 400 — without
+        # this the 404 would escape as a 500.
         raise HTTPException(status_code=400, detail=f"Invalid query: {e.message}")
 
     statement_type = probe.statement_type
@@ -422,9 +811,10 @@ async def health_check():
 
 
 @app.get("/schema", response_model=SchemaResponse)
-async def get_schema(table: str | None = None):
+async def get_schema(http_request: Request, table: str | None = None):
     """Get database schema information. Optionally filter to a single table."""
     start_time = time.perf_counter()
+    caps = _caps_for(http_request)
     if table and table not in VIEWS:
         resolved = _BASE_TABLES.get(table)
         if resolved:
@@ -441,7 +831,7 @@ async def get_schema(table: str | None = None):
         try:
             table_meta = bq_client.get_table(table_ref)
             overrides = _COLUMN_DESCRIPTIONS.get(table_name, {})
-            raw_cat_values = _get_categorical_values(table_name)
+            raw_cat_values = _get_categorical_values(table_name, caps)
             cat_values = _compact_categorical_values(raw_cat_values)
 
             # get row count and column modes from the base table: views report
@@ -500,7 +890,7 @@ async def get_schema(table: str | None = None):
 
     logger.info({
         "message": "schema",
-        "log_type": "endpoint_access",
+        **_access_log_fields(http_request, "/schema", "GET"),
         "table": table or "all",
         "tables_returned": len(tables),
         "warnings": len(warnings),
@@ -521,38 +911,44 @@ async def get_schema(table: str | None = None):
 
 
 @app.post("/query", response_model=QueryResponse)
-async def execute_query(request: QueryRequest):
+async def execute_query(request: QueryRequest, http_request: Request):
     """Execute a SQL query against the genetics database."""
     start_time = time.perf_counter()
     sql = request.sql
 
-    # auto-qualify table names and redirect base table names to views
-    for view in VIEWS:
-        fq = f"`{PROJECT_ID}.{DATASET_ID}.{view}`"
-        sql = sql.replace(f" {view}", f" {fq}")
-        sql = sql.replace(f"FROM {view}", f"FROM {fq}")
-        sql = sql.replace(f"JOIN {view}", f"JOIN {fq}")
-    for base, view in _BASE_TABLES.items():
-        fq = f"`{PROJECT_ID}.{DATASET_ID}.{view}`"
-        sql = sql.replace(f" {base}", f" {fq}")
-        sql = sql.replace(f"FROM {base}", f"FROM {fq}")
-        sql = sql.replace(f"JOIN {base}", f"JOIN {fq}")
+    # `QueryRequest.max_rows` carries a class-level `le=MAX_ROWS`, evaluated once at model
+    # definition time and therefore identical for every caller; the per-credential cap has to
+    # be applied here, after the principal is known. Tightening MAX_ROWS itself would move
+    # that class-level bound and so cap the relaxed callers too.
+    caps = _caps_for(http_request)
+    max_rows = min(request.max_rows, caps.max_rows)
 
     job_config = bigquery.QueryJobConfig(
-        maximum_bytes_billed=MAX_BYTES_BILLED,
+        maximum_bytes_billed=caps.max_bytes_billed,
         dry_run=request.dry_run,
+        default_dataset=_DEFAULT_DATASET,
     )
 
     # BigQuery parses the statement and reports its type and referenced tables; anything
     # that is not a plain SELECT over the exposed views is rejected before it can run
     probe = authorize_query(sql, job_config)
 
+    # the dry run already priced the statement, so the aggregate budget is checked *before*
+    # the bytes are spent rather than after — over budget is a 429, never a truncated result
+    estimated_bytes = probe.total_bytes_processed or 0
+    charged = caps.jti is not None and not request.dry_run
+    if charged:
+        allowed, spent = _charge_aggregate(caps.jti, estimated_bytes)
+        if not allowed:
+            raise _aggregate_budget_exceeded(caps.jti, estimated_bytes, spent)
+
+    settled = False
     try:
         if request.dry_run:
             bytes_processed = probe.total_bytes_processed
             logger.info({
                 "message": "query",
-                "log_type": "endpoint_access",
+                **_access_log_fields(http_request, "/query", "POST"),
                 "sql": request.sql,
                 "dry_run": True,
                 "total_rows": 0,
@@ -574,15 +970,18 @@ async def execute_query(request: QueryRequest):
         columns = [field.name for field in results.schema]
 
         for i, row in enumerate(results):
-            if i >= request.max_rows:
+            if i >= max_rows:
                 break
             rows.append([_serialize_value(v) for v in row.values()])
 
         bytes_processed = query_job.total_bytes_processed
+        if charged:
+            _reconcile_aggregate(caps.jti, (bytes_processed or 0) - estimated_bytes)
+            settled = True
         total_rows = results.total_rows
         logger.info({
             "message": "query",
-            "log_type": "endpoint_access",
+            **_access_log_fields(http_request, "/query", "POST"),
             "sql": request.sql,
             "dry_run": False,
             "total_rows": total_rows,
@@ -596,7 +995,7 @@ async def execute_query(request: QueryRequest):
             rows=rows,
             total_rows=total_rows,
             bytes_processed=bytes_processed,
-            truncated=total_rows > request.max_rows,
+            truncated=total_rows > max_rows,
         )
 
     except BadRequest as e:
@@ -606,6 +1005,12 @@ async def execute_query(request: QueryRequest):
     except Exception as e:
         logger.exception("Query execution failed")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # a job that never ran bills nothing, so a query that raises between the pre-flight
+        # charge and the reconcile must give the estimate back — otherwise a script's syntax
+        # errors, each priced by the dry run, eat the execution's budget without spending a byte
+        if charged and not settled:
+            _reconcile_aggregate(caps.jti, -estimated_bytes)
 
 
 def _serialize_value(value: Any) -> Any:
@@ -618,7 +1023,7 @@ def _serialize_value(value: Any) -> Any:
 
 
 @app.get("/tables/{table_name}/sample")
-async def get_sample(table_name: str, limit: int = 10):
+async def get_sample(table_name: str, http_request: Request, limit: int = 10):
     """Get sample rows from a table."""
     start_time = time.perf_counter()
     # accept both view names and base table names
@@ -629,15 +1034,14 @@ async def get_sample(table_name: str, limit: int = 10):
     limit = min(limit, 100)
     sql = f"SELECT * FROM `{PROJECT_ID}.{DATASET_ID}.{resolved}` LIMIT {limit}"
 
-    query_job = bq_client.query(sql, job_config=_internal_job_config())
-    results = query_job.result()
+    results = _run_internal_query(sql, _caps_for(http_request)).result()
 
     columns = [field.name for field in results.schema]
     rows = [[_serialize_value(v) for v in row.values()] for row in results]
 
     logger.info({
         "message": "sample",
-        "log_type": "endpoint_access",
+        **_access_log_fields(http_request, "/tables/{table_name}/sample", "GET"),
         "table": resolved,
         "rows_returned": len(rows),
         "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
@@ -646,7 +1050,7 @@ async def get_sample(table_name: str, limit: int = 10):
 
 
 @app.get("/stats")
-async def get_stats():
+async def get_stats(http_request: Request):
     """Get summary statistics for the database."""
     start_time = time.perf_counter()
     stats = {}
@@ -673,17 +1077,19 @@ async def get_stats():
         GROUP BY dataset, data_type
         ORDER BY count DESC
         """
-        results = bq_client.query(sql, job_config=_internal_job_config()).result()
+        results = _run_internal_query(sql, _caps_for(http_request)).result()
         stats["credible_sets_by_source"] = [
             {"dataset": row.dataset, "data_type": row.data_type, "count": row.count}
             for row in results
         ]
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"Could not get credible sets breakdown: {e}")
 
     logger.info({
         "message": "stats",
-        "log_type": "endpoint_access",
+        **_access_log_fields(http_request, "/stats", "GET"),
         "duration_ms": round((time.perf_counter() - start_time) * 1000, 2),
     })
     return stats

@@ -26,6 +26,8 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/load_peak_to_gene.sh](scripts/load_peak_to_gene.sh) loads Open4Gene peak-to-gene links (truncates `peak_to_gene`), which join peak-keyed caQTL credible sets to genes
 
+[scripts/load_phenotypes.sh](scripts/load_phenotypes.sh) builds and loads the `phenotypes` and `datasets` metadata tables from `datasets.yaml` and the metadata files it references; re-run after any registry change
+
 [scripts/load_open_chromatin.sh](scripts/load_open_chromatin.sh) loads the open-chromatin atlas (6 datasets)
 
 [scripts/load_variant_effect.sh](scripts/load_variant_effect.sh) loads in-silico predicted variant effects on chromatin accessibility (ChromBPNet, FLARE)
@@ -47,6 +49,24 @@ uv venv
 uv pip install -r pyproject.toml
 ```
 
+To run `tests/` as well, install the dev extra and run pytest from the repo root. The extra is
+pytest, httpx (which starlette's `TestClient` needs) and **pytest-randomly**, which shuffles the
+test order on every run and prints the seed — so two runs of the same tree legitimately execute
+in different orders. Reproduce a run with `-p randomly --randomly-seed=<seed>`, or pin a fixed
+order with `-p no:randomly` when bisecting:
+
+```bash
+uv pip install -e '.[dev]'
+pytest tests/
+```
+
+`api` is a **namespace package** reached through `sys.path`, not an installed one, and
+namespace packages merge every matching directory on `sys.path`. A `PYTHONPATH` pointing at
+another checkout of this repo would therefore add that tree's `api/` to `api.__path__` and
+let tests import source from it. `tests/conftest.py` aborts the run in `pytest_configure`
+when any `api.__path__` entry falls outside the pytest rootdir
+(genetics-results-suite-6o3); it is silent otherwise.
+
 ## Run the REST API server
 
 Requires Google Cloud credentials configured.
@@ -54,6 +74,32 @@ Requires Google Cloud credentials configured.
 ```bash
 PROJECT_ID=my-google-project DATASET_ID=genetics_results PORT=8080 python api/main.py
 ```
+
+### Point local development at the dev dataset
+
+`DATASET_ID` defaults to `genetics_results`, which is **production**. Starting the API
+without setting it makes every local query — and therefore the whole local chain, since
+chat-api and the browser BFF reach BigQuery only through this service — read production
+data. Set it explicitly:
+
+```bash
+PROJECT_ID=phewas-development DATASET_ID=genetics_dev PORT=8080 python api/main.py
+```
+
+`phewas-development:genetics_dev` (`europe-west1`) holds the full 15-table / 15-view
+schema with a small subset of the data (~3.6M rows / ~612 MB): chromosome 22 only for the
+results tables (capped at 500k rows for `gene_burden_results` and `open_chromatin`),
+`coloc_credsets` and `credible_sets` seeded from the credible-set IDs the loaded
+`colocalization` rows reference so both directions of that pivot resolve, and complete
+copies of the small tables — `datasets`, `phenotypes`, `gene_annotations` and
+`hla_associations`, the last because it is chromosome 6 by construction. Every view returns
+rows, but result *values* are not comparable with production and the dataset is not a
+benchmark target.
+
+No other *service setting* selects a dataset, but `genetics-mcp-server` hardcodes
+`genetics_results.<view>` in its generated SQL and tool descriptions, so its queries are
+rejected 403 by a `genetics_dev`-pointed API rather than following it. `genetics-results-api`
+and `genetics-results-browser` name no BigQuery dataset. See `docs/project-spec.md`.
 
 ## API endpoints
 
@@ -124,6 +170,8 @@ Queries go through a view (`<table>_v`) per table, which adds derived columns su
 - **variant_annotation** — FinnGen R14 per-variant functional annotations and allele frequencies
 - **peak_to_gene** — Open4Gene peak-to-gene links, joining peak-keyed caQTL results to genes
 - **hla_associations** — classical HLA allele associations (FinnGen R14; keyed by allele, not by variant)
+- **phenotypes** — trait metadata behind the results tables' phenotype codes, keyed by `(dataset, trait_original)`
+- **datasets** — dataset registry: what each results-view `dataset` value is, its resource, version and credible-set caveats
 
 ## License
 
