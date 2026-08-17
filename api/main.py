@@ -777,6 +777,49 @@ def authorize_query(sql: str, job_config: bigquery.QueryJobConfig) -> "bigquery.
         # statement was rejected before anything ran, so both are the caller's 400 — without
         # this the 404 would escape as a 500.
         raise HTTPException(status_code=400, detail=f"Invalid query: {e.message}")
+    except Forbidden as e:
+        # HTTP 403 is not only "denied": BigQuery also returns it for `quotaExceeded`,
+        # `billingNotEnabled` and `blocked`, and `from_http_status` maps every one of them to
+        # `Forbidden` regardless of reason. `quotaExceeded` is not in the client's
+        # `_RETRYABLE_REASONS`, so a project over its concurrent-query quota surfaces here
+        # verbatim. Answering those with the allow-list refusal would report a degraded service
+        # as the caller's bad query — a 4xx nothing retries and nothing alerts on. Discriminate
+        # on the reason; `errors` may be absent or empty.
+        reason = (e.errors or [{}])[0].get("reason")
+        if reason != "accessDenied":
+            logger.error({
+                "message": "dry run rejected by BigQuery, not an authorization failure",
+                "sql": sql,
+                "reason": reason,
+                "error": e.message,
+            })
+            raise HTTPException(
+                status_code=503, detail="Query authorization is temporarily unavailable"
+            )
+        # a genuine denial. This is *not* necessarily a table outside the exposed set — an IAM
+        # edit, an expired condition or a policy tag on an allow-listed view's columns denies
+        # one too — and the referencedTables that would tell them apart do not exist, because
+        # the job never started. So log it at error (denial on an exposed table is an outage)
+        # and phrase the refusal as the possibility it is.
+        #
+        # BigQuery's denial text stays out of the response because the caller has no use for
+        # it: it names a fully-qualified table the caller may never have written — for a bare
+        # name, this service's own project and dataset — and nothing the caller could do with
+        # it changes the outcome. Only the specific exception types BigQuery raises for a
+        # rejected statement are caught here — anything else escaping as a 500 is a real
+        # failure and should look like one.
+        logger.error({
+            "message": "dry run denied by BigQuery",
+            "sql": sql,
+            "error": e.message,
+        })
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Query was denied. It may reference tables outside the exposed set. "
+                f"Available: {sorted(VIEWS)}"
+            ),
+        )
 
     statement_type = probe.statement_type
     if statement_type != "SELECT":
@@ -1001,7 +1044,16 @@ async def execute_query(request: QueryRequest, http_request: Request):
     except BadRequest as e:
         raise HTTPException(status_code=400, detail=f"Invalid query: {e.message}")
     except Forbidden as e:
-        raise HTTPException(status_code=403, detail=f"Query forbidden: {e.message}")
+        # unreachable through caller-chosen tables — the gate already proved every referenced
+        # table is allow-listed — so this means the SA lost access to the exposed views. Kept
+        # non-verbatim anyway, for the same reason as the dry run's: the message names a fully
+        # qualified table and the caller has no use for it.
+        logger.warning({
+            "message": "query execution denied by BigQuery",
+            "sql": sql,
+            "error": e.message,
+        })
+        raise HTTPException(status_code=403, detail="Query forbidden")
     except Exception as e:
         logger.exception("Query execution failed")
         raise HTTPException(status_code=500, detail=str(e))
