@@ -846,11 +846,26 @@ genetics-results-db/
 │                              #   run ../genetics-results-suite/scripts/sync-datasets.sh
 ├── api/
 │   ├── main.py                # FastAPI application
+│   ├── sandbox_auth.py        # Per-execution sandbox JWT validation and caps
 │   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py
-├── tests/
+├── tests/                     # All client-free unless noted; none needs BigQuery credentials
+│   ├── conftest.py            # Foreign-checkout guard + auth env restore
 │   ├── test_api_auth.py       # Shared-secret authentication tests (never reach BigQuery)
-│   └── test_build_gene_annotations.py  # gene_annotations build unit tests
+│   ├── test_authorize_query_errors.py  # /query error mapping per BigQuery exception (stubbed)
+│   ├── test_build_gene_annotations.py  # gene_annotations build unit tests
+│   ├── test_build_phenotypes.py        # phenotypes/datasets NDJSON build unit tests
+│   ├── test_endpoint_access_log.py     # endpoint_access attribution rows
+│   ├── test_hla_view_columns.py        # hla_associations_v select list vs base-table schema
+│   ├── test_internal_query_caps.py     # per-credential row/byte caps
+│   ├── test_live_dataset_scope.py      # registry cross-check scope derived from VIEWS
+│   ├── test_load_data_row_counts.py    # load_table's (job, rows_written) contract
+│   ├── test_no_sql_rewriting.py        # asserts the deleted SQL-rewriting helpers stay deleted
+│   ├── test_query_caps.py              # /query row and byte limits
+│   ├── test_query_name_resolution.py   # bare-name resolution (skips without LIVE_BQ_* env)
+│   ├── test_sandbox_token_auth.py      # sandbox execution-token validation
+│   └── test_secret_read_timing.py      # per-request secret read and its fail-closed latch
 ├── docs/
+│   ├── credible-sets-clustering-swap.md  # credible_sets clustering swap runbook
 │   └── project-spec.md        # This document
 ├── pyproject.toml             # Python project metadata and dependencies
 ├── Dockerfile                 # Container image (built & deployed by genetics-results-suite via k8s)
