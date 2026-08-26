@@ -521,7 +521,7 @@ Dataset registry: what every `dataset` value appearing in the results views actu
 
 ### BigQuery Configuration
 
-- **Partitioning**: Result tables partitioned by chromosome using `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`. The small reference/link/metadata tables (`gene_annotations`, `peak_to_gene`, `phenotypes`, `datasets`) are unpartitioned — a full scan of them is cheap and their access is gene-keyed rather than positional.
+- **Partitioning**: a table is partitioned by chromosome (`PARTITION BY RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`) exactly when a chromosome filter can eliminate work — i.e. its rows span chromosomes *and* it is accessed positionally. Everything else is unpartitioned: the small reference/link/metadata tables, whose access is gene- or key-keyed and a full scan of which is cheap, and `hla_associations`, whose every row is chr 6 so a chromosome partition would hold the whole table. **Do not read the membership of either set out of this paragraph** — it has already gone stale once by omitting `hla_associations`. Re-derive it: `grep -L 'PARTITION BY' schemas/*.sql | grep -v _v.sql` lists the unpartitioned base tables.
 - **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables). `credible_sets` is the exception and the model to copy for high-traffic tables: it clusters on `data_type, resource, variant, pos`, the columns callers are actually told to filter by, which required storing `resource` and `variant` instead of deriving them in the view — clustering cannot use a view-derived expression. Clustering and partitioning cannot be changed in place; see [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md) for the rebuild pattern and why `setup_bigquery.sh` cannot do it.
 
 ### API Service
@@ -719,7 +719,21 @@ All code uses Application Default Credentials (ADC), so role separation is achie
 
 ## Configuration
 
-Configuration via environment variables:
+Configuration via environment variables. **Re-derive this table rather than trusting it** —
+it silently lost `SANDBOX_ENABLED`, `SANDBOX_TOKEN_SIGNING_KEY` and `LOG_SOURCE` once already:
+
+```sh
+grep -rhEA1 '(os\.environ(\.get)?|os\.getenv|_env_int)\(' api/ \
+  | grep -oE '"[A-Z][A-Z0-9_]{2,}"' | tr -d '"' | sort -u
+```
+
+That finds 15 names, i.e. every row below except `LOCATION` and `GCS_BUCKET`/`GCS_PREFIX`,
+which are read only by `scripts/`. Neither of the two complications is optional: `-A1`
+because the name is not always on the line that opens the call (`CORS_ORIGINS` in
+`api/main.py` sits on the next line), and `_env_int` because the four
+`SANDBOX_MAX_*` limits in `api/sandbox_budget.py` are read through that helper, so no
+`os.environ` pattern of any kind finds them. A recipe missing either under-reports by five
+rows while looking authoritative, which is worse than the stale list it replaces.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -733,6 +747,9 @@ Configuration via environment variables:
 | GCS_BUCKET / GCS_PREFIX | varies by loader (placeholder `bucket-name` with an empty prefix in most, `finngen-commons` + `results_api_data/` in the newer ones) | GCS source location for `scripts/load_*.sh` |
 | CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
 | INTERNAL_API_SECRET | (unset) | Shared secret required as `Authorization: Bearer` on every endpoint except `/health`. Unset disables authentication entirely (logs a warning at startup) |
+| SANDBOX_ENABLED | (unset, i.e. off) | **Does not gate token acceptance**, despite the name. Its only reader is `require_sandbox_config` (`api/sandbox_auth.py`), called once at import from `api/main.py`, which keys a startup invariant on it: with the flag true and either `INTERNAL_API_SECRET` or `SANDBOX_TOKEN_SIGNING_KEY` missing, the process exits 1. `verify_sandbox_token` never consults it — it consults only the signing key — so with this flag unset and a signing key set, **sandbox tokens are still accepted**. The flag tracks whether the sandbox Deployment exists, nothing more. (`_sandbox_is_deployed` re-reads `os.environ` on each call for consistency with the key accessor, but only that one startup caller ever calls it.) |
+| SANDBOX_TOKEN_SIGNING_KEY | (unset) | HS256 key the sandbox execution tokens chat-backend mints are verified against — this, alone, is what decides whether a sandbox token is accepted. Read per call (unset ⇒ every sandbox token 401s). Must be at least `MIN_SIGNING_KEY_BYTES` (32) bytes ignoring surrounding whitespace, or startup fails |
+| LOG_SOURCE | genetics_db_api_prod | Value stamped into the `log_source` field of `endpoint_access` lines — three of the four such lines in `api/main.py`; the fourth, in `_aggregate_budget_exceeded`, carries neither `log_source` nor `service`. It is the **environment** axis, not a service discriminator — `jsonPayload.service` (the constant `"db-api"`) is that. See the suite's project-spec → Log sinks |
 | SANDBOX_MAX_REQUESTS_PER_EXECUTION | 1000 | Requests one sandbox execution (`jti`) may issue. Applies **only** to a caller presenting a sandbox token |
 | SANDBOX_MAX_CONCURRENT_REQUESTS | 4 | In-flight requests per sandbox execution |
 | SANDBOX_MAX_CONCURRENT_REQUESTS_TOTAL | 8 | In-flight sandbox requests pod-wide, across all executions. Must be >= the per-execution value or the process refuses to start |
