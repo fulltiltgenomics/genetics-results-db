@@ -55,6 +55,17 @@ MAX_TOKEN_AGE_SECONDS = 300
 # MAX_TOKEN_AGE_SECONDS check below, which stays exact.
 LEEWAY_SECONDS = 5
 
+# Shortest SANDBOX_TOKEN_SIGNING_KEY `require_sandbox_config` will start with, measured on the
+# stripped value but NEVER applied to it — see the gate for why nothing may normalise this key.
+# 32 is not a feel: RFC 7518 §3.2 requires an HS256 key at least as long as the hash output, and
+# PyJWT 2.12 warns `InsecureKeyLengthWarning: The HMAC key is N bytes long, which is below the
+# minimum recommended length of 32 bytes for SHA256` under it — so this is the threshold the
+# crypto library already complains about, moved from a warning nobody reads to a startup refusal.
+# Every generator the suite ships clears it with room to spare: `openssl rand -base64 32` in
+# scripts/create-secrets.sh is 44 chars and `secrets.token_urlsafe(32)` in scripts/dev-stack.sh
+# is 43, so the gate rejects nothing a correct install produces.
+MIN_SIGNING_KEY_BYTES = 32
+
 def _signing_key() -> str:
     """The HS256 key `verify_sandbox_token` validates against, read fresh on every call.
 
@@ -191,6 +202,9 @@ def verify_sandbox_token(token: str) -> SandboxPrincipal:
 def require_sandbox_config(internal_api_secret: str) -> None:
     """Refuse to start mis-configured while the sandbox is deployed.
 
+    Two failures, both fatal: a missing secret, and a ``SANDBOX_TOKEN_SIGNING_KEY`` too short to
+    be a real HS256 key (see ``MIN_SIGNING_KEY_BYTES``).
+
     ``SANDBOX_ENABLED`` tracks the sandbox Deployment, not the signing key. Rules 1-5 of the
     design all fire on "a sandbox-shaped bearer", and nothing obliges the sandbox to send one
     — a script that simply omits ``Authorization`` would fall into ``require_auth``'s
@@ -241,3 +255,36 @@ def require_sandbox_config(internal_api_secret: str) -> None:
             " and ".join(missing),
         )
         sys.exit(1)
+
+    # A truthy key is not a usable key: "   ", "\n", "x" and "0" all passed the check above and
+    # became guessable HMAC keys that mint valid sandbox principals (the `kubectl create secret
+    # --from-file` of a near-empty file). Length is checked on the STRIPPED value and the
+    # stripped value is then thrown away, deliberately: chat-backend MINTS with its own copy of
+    # the secret and this service VERIFIES with `os.environ`'s exact bytes, so normalising here
+    # would 401 every legitimate token whenever the deployed key carries a trailing newline.
+    # `surrogateescape` because a non-UTF-8 secret reaches os.environ as surrogates, and a bare
+    # .encode() would kill startup with a traceback instead of this message.
+    key = _signing_key()
+    stripped = key.strip()
+    if len(stripped.encode("utf-8", "surrogateescape")) < MIN_SIGNING_KEY_BYTES:
+        logger.error(
+            "SANDBOX_TOKEN_SIGNING_KEY is %d bytes (ignoring surrounding whitespace), below the "
+            "%d-byte minimum for HS256 (RFC 7518 §3.2): refusing to start with a guessable "
+            "signing key while the sandbox can reach this service. Generate one with "
+            "`openssl rand -base64 32`.",
+            len(stripped.encode("utf-8", "surrogateescape")),
+            MIN_SIGNING_KEY_BYTES,
+        )
+        sys.exit(1)
+
+    # Not fatal, because the value is load-bearing exactly as deployed and both sides may well
+    # carry the same newline — but a secret whose whitespace is part of the key is something an
+    # operator should see rather than discover from a 401 after rotating it through a different
+    # path (genetics-results-suite-4h6.36).
+    if key != stripped:
+        logger.warning(
+            "SANDBOX_TOKEN_SIGNING_KEY has leading or trailing whitespace, which is PART OF THE "
+            "KEY here and at the minter: chat-backend must hold the byte-identical value or "
+            "every sandbox token will 401. Likely `kubectl create secret --from-file` of a file "
+            "with a trailing newline."
+        )
