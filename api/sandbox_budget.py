@@ -229,8 +229,12 @@ def admit(principal: sandbox_auth.SandboxPrincipal) -> Rejection | None:
 
 
 def release(jti: str) -> None:
-    """Free the request slot. Called from a `finally`, so an exception or an unmatched-path
-    404 cannot leak one."""
+    """Give back one in-flight slot for `jti`, pod-wide and per-execution.
+
+    Never raises and never goes negative: both counters clamp at zero, and a `jti` whose
+    entry has already been swept is a no-op. So releasing more often than admitting cannot
+    corrupt the accounting — which is what makes it safe to call unconditionally from the
+    caller's `finally`."""
     global _in_flight_total
     with _lock:
         _in_flight_total = max(0, _in_flight_total - 1)

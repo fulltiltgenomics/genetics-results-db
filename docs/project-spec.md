@@ -870,7 +870,7 @@ genetics-results-db/
 │                              #   run ../genetics-results-suite/scripts/sync-datasets.sh
 ├── api/
 │   ├── main.py                # FastAPI application
-│   ├── sandbox_auth.py        # Per-execution sandbox JWT validation and caps
+│   ├── sandbox_auth.py        # Per-execution sandbox JWT validation (the caps it gates are in main.py)
 │   ├── sandbox_budget.py      # Per-jti request-count/concurrency gate + its ASGI middleware
 │   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py
 ├── tests/                     # All client-free unless noted; none needs BigQuery credentials

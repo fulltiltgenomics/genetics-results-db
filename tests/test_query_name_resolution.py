@@ -86,6 +86,28 @@ def test_a_bare_base_table_name_resolves(client):
     assert response.json()["total_rows"] == 3
 
 
+@pytest.mark.parametrize("reference", [
+    "datasets_v",
+    "`datasets_v`",
+], ids=["bare", "backticked"])
+def test_a_bare_name_in_a_from_position_resolves_the_same_backticked(client, reference):
+    """Backticks quote an identifier, they do not qualify it, so `default_dataset` resolves
+    both spellings to the same table.
+
+    Asserted rather than assumed: the parametrized cases below vary the *CTE declaration*,
+    and nothing exercised a backticked FROM *reference* resolving via the default dataset.
+    The docs lean on this equivalence to demote a hazard, and the previous confidently
+    stated backtick claim in the same docs turned out to be wrong.
+    """
+    qualified = _query(
+        client, f"SELECT COUNT(*) AS n FROM `{PROJECT_ID}.{DATASET_ID}.datasets_v`"
+    )
+    assert qualified.status_code == 200, qualified.text
+    response = _query(client, f"SELECT COUNT(*) AS n FROM {reference}")
+    assert response.status_code == 200, response.text
+    assert response.json()["rows"] == qualified.json()["rows"]
+
+
 def test_the_shadowed_table_really_is_bigger_than_the_ctes_below(client):
     """Makes the shadowing assertions meaningful: `datasets` has many rows, the CTEs one."""
     response = _query(client, f"SELECT COUNT(*) AS n FROM `{PROJECT_ID}.{DATASET_ID}.datasets_v`")
