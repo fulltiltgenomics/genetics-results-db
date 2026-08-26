@@ -24,9 +24,10 @@ from google.cloud import bigquery
 from google.api_core.exceptions import BadRequest, Forbidden, NotFound
 
 try:  # packaged as `api.` in the image, run as a bare module in some scripts
-    from api import sandbox_auth
+    from api import sandbox_auth, sandbox_budget
 except ImportError:  # pragma: no cover
     import sandbox_auth
+    import sandbox_budget
 
 
 class _GCPJsonFormatter(logging.Formatter):
@@ -342,6 +343,12 @@ CORS_ORIGINS = [
     ).split(",")
     if o.strip()
 ]
+
+# Added BEFORE CORS and therefore INNER of it, so a browser preflight still gets its CORS
+# headers; the gate is a no-op for browser traffic either way, since no browser carries a
+# sandbox token. Both sit outside the router, which is what makes the gate count unmatched
+# paths and the docs routes (api/sandbox_budget.py).
+app.add_middleware(sandbox_budget.SandboxBudgetMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -699,6 +706,12 @@ class QueryResponse(BaseModel):
     total_rows: int
     bytes_processed: int
     truncated: bool
+    # the row ceiling this request actually ran under: min(requested, per-credential cap).
+    # `truncated` says the answer is a positional prefix but not where it was cut, and the two
+    # candidate ceilings differ by 4x (SANDBOX_MAX_ROWS 25 000 vs the relaxed MAX_ROWS), so a
+    # caller could not tell whether raising `max_rows` would help. Additive: no existing field
+    # changed name or meaning, because chat-backend and mcp-server both parse this response.
+    max_rows_applied: int
 
 
 class TableInfo(BaseModel):
@@ -1005,6 +1018,7 @@ async def execute_query(request: QueryRequest, http_request: Request):
                 total_rows=0,
                 bytes_processed=bytes_processed,
                 truncated=False,
+                max_rows_applied=max_rows,
             )
 
         query_job = bq_client.query(sql, job_config=job_config)
@@ -1039,6 +1053,7 @@ async def execute_query(request: QueryRequest, http_request: Request):
             total_rows=total_rows,
             bytes_processed=bytes_processed,
             truncated=total_rows > max_rows,
+            max_rows_applied=max_rows,
         )
 
     except BadRequest as e:

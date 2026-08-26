@@ -566,9 +566,19 @@ Every query is authorized before it runs (see Security → Query authorization).
   "rows": [["val1", "val2"], ...],
   "total_rows": 100,
   "bytes_processed": 1048576,
-  "truncated": false
+  "truncated": false,
+  "max_rows_applied": 1000
 }
 ```
+
+`max_rows_applied` is the row ceiling this request actually ran under — `min(max_rows, the
+per-credential cap)`, so 25 000 is the most a sandbox execution can see and 100 000 the most a
+caller verified against `INTERNAL_API_SECRET` can. It exists because `truncated` says the rows
+are a positional prefix without saying **where** the cut fell, and the two candidate ceilings
+differ by 4x, so a caller could not tell whether raising `max_rows` would help; mcp-server's SDK
+quotes this number in the error it raises rather than hardcoding one
+(`genetics-results-suite-4h6.32`). It is additive — no existing field changed name or meaning,
+because chat-backend and mcp-server both parse this response.
 
 ### Schema Response Format
 
@@ -680,6 +690,16 @@ Notes:
 
 - `maximum_bytes_billed` on every BigQuery job, including the internal ones behind `/schema`, `/stats` and `/tables/{name}/sample` (previously uncapped, so a large table could run up an unbounded scan). All four paths resolve the ceiling from the *requesting* caller's principal via `_caps_for()`, and the three internal ones share `_run_internal_query()`. `/schema`'s distinct-value scans used to pass no request at all and so ran at the operator ceiling — for a sandbox caller, twice its own per-query cap — and were charged to nobody
 - **The sandbox aggregate byte budget (`SANDBOX_AGGREGATE_BYTES_BUDGET`, 200 GB per `jti`) spans all four paths, not just `/query`.** `/query` charges the dry run's estimate before the job runs and reconciles afterwards to `total_bytes_processed`, refunding the whole estimate in a `finally` if the job raises before it can be reconciled. The three internal paths have no dry run to price them, so `_run_internal_query()` refuses to start a job once the budget is spent and charges what the job processed once it finishes; the budget can therefore be overshot by at most one query's `maximum_bytes_billed`, which is exactly what the per-query cap bounds. `total_bytes_processed` rather than `total_bytes_billed` because a dry run reports only the former, so it is the one figure available on both sides of the correction. Charging `/schema`'s scans to the triggering caller does not contaminate the shared `_get_categorical_values` cache across callers: a job over that caller's ceiling fails and leaves the cache unpopulated for the next caller to retry. The counter is in-process, so db-api's `replicas: 1` is load-bearing — see the comment in the suite repo's `k8s/deployments/db-api.yaml`
+- **Per-execution request count and concurrency (`api/sandbox_budget.py`, `genetics-results-suite-4h6.61`).** The byte budget above bounds spend and nothing else, and the paths that run no BigQuery job charge it nothing: `/health`, `/docs`, `/redoc`, `/openapi.json`, an unmatched path, `/schema` on a categorical-value cache hit, `/stats`' `get_table` metadata loop. A sandbox execution has 60-120 s of wall clock in which to loop those at unbounded concurrency, and this pod is `replicas: 1` at `cpu: 500m` / `memory: 512Mi` and also serves the browser's chat path through chat-backend — so the failure mode is an availability one, on a caller that is not the sandbox. `SandboxBudgetMiddleware` therefore admits a slot per request keyed on the token's `jti`, before routing, and releases it in a `finally`:
+
+  | Limit | Default | Env var |
+  |---|---|---|
+  | Requests per execution | 1000 | `SANDBOX_MAX_REQUESTS_PER_EXECUTION` |
+  | In-flight requests per execution | 4 | `SANDBOX_MAX_CONCURRENT_REQUESTS` |
+  | In-flight sandbox requests pod-wide | 8 | `SANDBOX_MAX_CONCURRENT_REQUESTS_TOTAL` |
+  | Tracked executions (map bound) | 4096 | `SANDBOX_MAX_TRACKED_EXECUTIONS` |
+
+  The names, defaults, 429 payload (`detail`/`code`/`limit`/`observed`) and `code` vocabulary (`sandbox_request_count`, `sandbox_concurrency`, `sandbox_concurrency_pod`, `sandbox_execution_tracker_full`) are results-api's, so the two services are diagnosable the same way. Each value is validated at import: below 1 turns a `>=` ceiling into "reject every sandbox request", and a pod-wide bound below the per-execution one makes the per-execution number a lie — both refuse to start. **A request with no sandbox token is not touched at all**: chat-backend and mcp-server present `INTERNAL_API_SECRET` and the kubelet probes `/health` with nothing, and neither creates an entry or can be rejected. It has to be middleware rather than a dependency because `require_auth` is an app-level `Depends`, solved only for a **matched** route — an unmatched path 404s out of the router with no dependency entered, so a dependency placement would neither count it nor release its slot, and the sweep refuses to evict an entry with `in_flight > 0`. For the same reason the middleware resolves the sandbox principal from the raw ASGI headers itself instead of reading `request.state.principal`, which `require_auth` sets later. Eviction is by token expiry (an entry goes only once its token can no longer authenticate **and** nothing is in flight under it), not the LRU `_jti_bytes` uses — an evicted counter is a reset budget. That leaves two per-`jti` maps in this service with different eviction policies; the byte-budget map is deliberately unchanged
 - **Unqualified table names are resolved by BigQuery, not by db-api.** Both job configs on the `/query` path — the execution config and `authorize_query()`'s dry-run probe — carry `default_dataset = _DEFAULT_DATASET` (`{PROJECT_ID}.{DATASET_ID}`), so `FROM credible_sets_v` and `FROM datasets` resolve server-side. The two must stay identical: the allow-list is checked against the dry run, so a dry run that resolved a bare name differently from the execution would be a gate bypass. `referencedTables` still comes back **fully qualified** (`{projectId, datasetId, tableId}`) however a name was written, which is what makes `_ALLOWED_TABLE_IDS` independent of the caller's spelling; an explicitly qualified table outside the allow-list still resolves to itself and is still 403'd. A bare name absent from the default dataset is a dry-run `NotFound`, converted to a 400 alongside `BadRequest` — nothing executes.
 - **db-api no longer parses SQL, and must not start again.** It used to rewrite the caller's text: `_qualify_tables()` replaced a bare name after `FROM`/`JOIN` with the fully-qualified view, excluding names that `_cte_names()`' paren-depth scan believed a `WITH` clause had declared. That scan was a regex emulating SQL scoping, and three rounds each closed one lexical case and revealed the next, every one returning the **same silent wrong answer** — 889 rows of `datasets_v`, HTTP 200, where the caller asked for their one-row CTE: (1) a CTE aliased to a view or base-table name was rewritten; (2) a *backticked* CTE declaration was erased by the noise-blanking, so the scan saw no CTE; (3) BigQuery decodes escape sequences inside backtick-quoted identifiers, so `` WITH `\u0064atasets` AS (…) `` declares a CTE genuinely named `datasets` that no text match can find, while `` `a\`b` `` desynchronises backtick pairing and erases an arbitrary later span. The class was not exhausted and would not be, because the residuals are the difference between a regex and BigQuery's grammar. Deleting the rewrite deletes the whole class: `_qualify_tables`, `_cte_names`, `_SQL_NOISE`, `_IDENT_NOISE`, `_blank_noise`, `_CTE_SCAN`, `_QUALIFY_TARGETS` and the error hint that explained CTE shadowing are gone, along with the over-collecting residuals (`WINDOW w AS (…)`, `UNNEST(x) WITH OFFSET`, a backticked identifier containing `WITH`) they carried. A CTE now simply shadows, correctly, as in any SQL engine. Do not reintroduce a text rewrite as an optimisation. `_BASE_TABLES` survives for `/schema` and `/tables/{name}/sample` name lookups and for `_ALLOWED_TABLE_IDS`, not for rewriting. **One real behaviour change:** the rewrite used to turn `FROM credible_sets` into `credible_sets_v`, so a human writing a bare base-table name on `/query` now gets the base table — which is not column-identical to its view (`credible_sets_v` adds `maf` and reorders columns), so that query silently loses `maf`. The data is correct and the reach is unchanged (base tables were always allow-listed), and the MCP server is unaffected because it emits only `_v` names. The behaviour is pinned by `tests/test_query_name_resolution.py`, which asserts on the rows returned against a live BigQuery (set `LIVE_BQ_PROJECT_ID` / `LIVE_BQ_DATASET_ID`; the module skips otherwise), and — because this repo has no CI and those tests skip by default — by `tests/test_no_sql_rewriting.py`, which needs no BigQuery and asserts that none of the deleted helpers are back, that `/query` hands both the dry-run probe and the execution the caller's SQL byte for byte, and that the probe's `default_dataset` is taken from the caller's job config rather than a module constant
 - IAM-level read-only enforcement on the API service account (see IAM Roles below)
@@ -713,6 +733,10 @@ Configuration via environment variables:
 | GCS_BUCKET / GCS_PREFIX | varies by loader (placeholder `bucket-name` with an empty prefix in most, `finngen-commons` + `results_api_data/` in the newer ones) | GCS source location for `scripts/load_*.sh` |
 | CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
 | INTERNAL_API_SECRET | (unset) | Shared secret required as `Authorization: Bearer` on every endpoint except `/health`. Unset disables authentication entirely (logs a warning at startup) |
+| SANDBOX_MAX_REQUESTS_PER_EXECUTION | 1000 | Requests one sandbox execution (`jti`) may issue. Applies **only** to a caller presenting a sandbox token |
+| SANDBOX_MAX_CONCURRENT_REQUESTS | 4 | In-flight requests per sandbox execution |
+| SANDBOX_MAX_CONCURRENT_REQUESTS_TOTAL | 8 | In-flight sandbox requests pod-wide, across all executions. Must be >= the per-execution value or the process refuses to start |
+| SANDBOX_MAX_TRACKED_EXECUTIONS | 4096 | Bound on the per-execution counter map itself. A backstop, not a working limit |
 
 ### Dev dataset
 
@@ -847,6 +871,7 @@ genetics-results-db/
 ├── api/
 │   ├── main.py                # FastAPI application
 │   ├── sandbox_auth.py        # Per-execution sandbox JWT validation and caps
+│   ├── sandbox_budget.py      # Per-jti request-count/concurrency gate + its ASGI middleware
 │   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py
 ├── tests/                     # All client-free unless noted; none needs BigQuery credentials
 │   ├── conftest.py            # Foreign-checkout guard + auth env restore
@@ -862,6 +887,7 @@ genetics-results-db/
 │   ├── test_no_sql_rewriting.py        # asserts the deleted SQL-rewriting helpers stay deleted
 │   ├── test_query_caps.py              # /query row and byte limits
 │   ├── test_query_name_resolution.py   # bare-name resolution (skips without LIVE_BQ_* env)
+│   ├── test_sandbox_budget.py          # per-jti request-count and concurrency gate
 │   ├── test_sandbox_token_auth.py      # sandbox execution-token validation
 │   └── test_secret_read_timing.py      # per-request secret read and its fail-closed latch
 ├── docs/
