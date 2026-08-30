@@ -19,6 +19,26 @@ REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 DEFAULT_YAML = os.path.join(REPO_ROOT, "..", "genetics-results-suite", "configs", "datasets.yaml")
 SCHEMAS_DIR = os.path.join(REPO_ROOT, "schemas")
 
+# NOT an inventory of views and NOT a grant list — the membership predicate is "this view's
+# `resource` column is DERIVED from a `dataset` discriminator via the CASE/WHEN rules in
+# datasets.yaml", not "this view exists". Only cmd_lint() and the `generate` subcommand's
+# choices= read it, so adding a view with no CASE to lint makes lint fail permanently
+# ("no CASE blocks found in SQL file") — unless the view is ALSO listed in
+# MATERIALIZED_RESOURCE_VIEWS below, the one passing path for a CASE-less view.
+# credible_sets_v takes it and lints "OK (resource materialized at load time)".
+#
+# So 11 here against 15 views in configs/datasets.yaml is deliberate, not a short list. The
+# four excluded, and why: gene_annotations_v and variant_annotation_v are single-source
+# reference tables whose resource is a hardcoded constant with no `dataset` column to switch
+# on (schemas/gene_annotations_v.sql, schemas/variant_annotation_v.sql); phenotypes_v and
+# datasets_v carry `resource` as a REAL column taken straight from the datasets.yaml
+# registry, which is authoritative, whereas the CASE blocks exist only to recover the
+# resource from a dataset NAME where the registry is not available in the row —
+# schemas/phenotypes_v.sql and schemas/datasets_v.sql both say so and both say not to add
+# the view here. scripts/live_dataset_scope.py's EXCLUDED_VIEWS is the parallel map, with
+# the same four and a reason per entry (its reason for those last two is a different and
+# correct one: that module validates the mapping against live data, so including a view
+# built from the same mapping would make the check self-confirming).
 ALL_VIEWS = [
     "credible_sets_v",
     "colocalization_v",
