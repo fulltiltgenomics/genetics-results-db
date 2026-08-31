@@ -21,16 +21,15 @@
 
 set -euo pipefail
 
-ts() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-bucket-name}"
-GCS_PREFIX="${GCS_PREFIX:-}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# with an empty default both rules agree, so nothing here proves unset-or-empty is the
+# right one; give this a non-empty default and the documented daly `GCS_PREFIX=` needs it
+GCS_PREFIX="$(resolve_gcs_prefix unset-or-empty "")"
 
 ts "Loading HLA allele associations into ${PROJECT_ID}.${DATASET_ID}"
 
@@ -71,6 +70,4 @@ ts "=== HLA data loading complete ==="
 
 echo ""
 ts "Table row counts:"
-count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
-  "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.hla_associations\`" 2>/dev/null | tail -1) || count="error"
-ts "  hla_associations: ${count} rows"
+report_row_counts hla_associations

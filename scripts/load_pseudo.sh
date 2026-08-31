@@ -6,16 +6,13 @@
 
 set -euo pipefail
 
-ts() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-finngen-commons}"
-GCS_PREFIX="${GCS_PREFIX-results_api_data/}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GCS_PREFIX="$(resolve_gcs_prefix unset-only "results_api_data/")"
 
 ts "Loading pseudo credible sets into ${PROJECT_ID}.${DATASET_ID}"
 
@@ -57,6 +54,4 @@ ts "=== Pseudo credible set loading complete ==="
 
 echo ""
 ts "Credible sets row count:"
-count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
-  "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.credible_sets\`" 2>/dev/null | tail -1) || count="error"
-ts "  credible_sets: ${count} rows"
+report_row_counts credible_sets

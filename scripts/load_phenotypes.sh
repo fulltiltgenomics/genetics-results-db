@@ -21,19 +21,15 @@
 
 set -euo pipefail
 
-ts() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 PROFILE="${PROFILE:-finngen}"
 GCS_BUCKET="${GCS_BUCKET:-finngen-commons}"
-# no colon: only an UNSET prefix takes the default, so an explicitly empty GCS_PREFIX=""
-# (a bucket-root layout) is honored
-GCS_PREFIX="${GCS_PREFIX-results_api_data/mapping_files/}"
+GCS_PREFIX="$(resolve_gcs_prefix unset-only "results_api_data/mapping_files/")"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATASETS_YAML="${DATASETS_YAML:-${SCRIPT_DIR}/../configs/datasets.yaml}"
 
 PHENOTYPES_URI="${PHENOTYPES_URI:-gs://${GCS_BUCKET}/${GCS_PREFIX}phenotypes.ndjson}"
@@ -125,8 +121,4 @@ ts "=== Metadata loading complete ==="
 
 echo ""
 ts "Table row counts:"
-for table in phenotypes datasets; do
-  count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
-    "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.${table}\`" 2>/dev/null | tail -1) || count="error"
-  ts "  ${table}: ${count} rows"
-done
+report_row_counts phenotypes datasets

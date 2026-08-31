@@ -3,16 +3,13 @@
 
 set -euo pipefail
 
-ts() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-bucket-name}"
-GCS_PREFIX="${GCS_PREFIX:-}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GCS_PREFIX="$(resolve_gcs_prefix unset-or-empty "")"
 
 ts "Loading ASM-QTL data into ${PROJECT_ID}.${DATASET_ID}"
 
@@ -54,6 +51,4 @@ ts "=== ASM-QTL data loading complete ==="
 
 echo ""
 ts "Table row counts:"
-count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
-  "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.asm_qtl\`" 2>/dev/null | tail -1) || count="error"
-ts "  asm_qtl: ${count} rows"
+report_row_counts asm_qtl

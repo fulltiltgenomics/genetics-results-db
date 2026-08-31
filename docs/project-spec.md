@@ -744,7 +744,7 @@ rows while looking authoritative, which is worse than the stale list it replaces
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
 | PORT | 8080 | API server port |
 | DATASETS_CONFIG_PATH | ./configs/datasets.yaml | Path to shared datasets YAML config |
-| GCS_BUCKET / GCS_PREFIX | varies by loader (placeholder `bucket-name` with an empty prefix in most, `finngen-commons` + `results_api_data/` in the newer ones) | GCS source location for `scripts/load_*.sh` |
+| GCS_BUCKET / GCS_PREFIX | varies by loader (placeholder `bucket-name` with an empty prefix in most; `finngen-commons` with a `GCS_PREFIX` rooted at `results_api_data/` in the newer ones — some append a `mapping_files/` subdirectory, see the individual script for its exact default) | GCS source location for `scripts/load_*.sh`. Whether an explicitly empty `GCS_PREFIX=""` survives or is replaced by the loader's default is a per-loader choice, named at each call site as `resolve_gcs_prefix unset-only` / `unset-or-empty` (`scripts/lib/common.sh`) |
 | CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
 | INTERNAL_API_SECRET | (unset) | Shared secret required as `Authorization: Bearer` on every endpoint except `/health`. Unset disables authentication entirely (logs a warning at startup) |
 | SANDBOX_ENABLED | (unset, i.e. off) | **Does not gate token acceptance**, despite the name. Its only reader is `require_sandbox_config` (`api/sandbox_auth.py`), called once at import from `api/main.py`, which keys a startup invariant on it: with the flag true and either `INTERNAL_API_SECRET` or `SANDBOX_TOKEN_SIGNING_KEY` missing, the process exits 1. `verify_sandbox_token` never consults it — it consults only the signing key — so with this flag unset and a signing key set, **sandbox tokens are still accepted**. The flag tracks whether the sandbox Deployment exists, nothing more. (`_sandbox_is_deployed` re-reads `os.environ` on each call for consistency with the key accessor, but only that one startup caller ever calls it.) |
@@ -861,6 +861,8 @@ genetics-results-db/
 │   ├── datasets.sql                   # Dataset registry keyed by results-view `dataset`
 │   └── datasets_v.sql                 # Pass-through view (resource is a registry column)
 ├── scripts/
+│   ├── lib/
+│   │   └── common.sh      # helpers shared by scripts/load_*.sh — add here rather than duplicating across loaders
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_credsets_coloc.sh  # Load credible sets and colocalization data
