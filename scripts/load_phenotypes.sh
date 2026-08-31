@@ -21,19 +21,15 @@
 
 set -euo pipefail
 
-ts() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 PROFILE="${PROFILE:-finngen}"
 GCS_BUCKET="${GCS_BUCKET:-finngen-commons}"
-# no colon: only an UNSET prefix takes the default, so an explicitly empty GCS_PREFIX=""
-# (a bucket-root layout) is honored
-GCS_PREFIX="${GCS_PREFIX-results_api_data/mapping_files/}"
+GCS_PREFIX="$(resolve_gcs_prefix unset-only "results_api_data/mapping_files/")"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATASETS_YAML="${DATASETS_YAML:-${SCRIPT_DIR}/../configs/datasets.yaml}"
 
 PHENOTYPES_URI="${PHENOTYPES_URI:-gs://${GCS_BUCKET}/${GCS_PREFIX}phenotypes.ndjson}"
@@ -50,11 +46,12 @@ ts "Loading phenotype/dataset metadata into ${PROJECT_ID}.${DATASET_ID} (profile
 # be derived from config, so cross-check it against what the results views actually contain;
 # the builder FAILS on any mismatch it has not been told to expect.
 #
-# The scope of that cross-check is DERIVED from api/main.py's VIEWS list rather than written
-# out here (see scripts/live_dataset_scope.py): a hardcoded table list makes a brand-new table
-# invisible to the check, which is how hla_associations shipped with no `datasets` row while
-# this loader reported success.
-ts "Deriving cross-check scope from api/main.py VIEWS..."
+# The scope of that cross-check is DERIVED from datasets.yaml's `tables` block - the same
+# registry the API derives its exposed views from - rather than written out here (see
+# scripts/live_dataset_scope.py): a hardcoded table list makes a brand-new table invisible to
+# the check, which is how hla_associations shipped with no `datasets` row while this loader
+# reported success.
+ts "Deriving cross-check scope from datasets.yaml..."
 dataset_columns=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
   --max_rows=100000 "
   SELECT table_name, column_name
@@ -62,7 +59,7 @@ dataset_columns=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false -
   WHERE column_name IN ('dataset', 'dataset1', 'dataset2')" 2>/dev/null) || dataset_columns=""
 
 live_sql=$(printf '%s' "${dataset_columns}" | python3 "${SCRIPT_DIR}/live_dataset_scope.py" \
-  --views-file "${SCRIPT_DIR}/../api/main.py" \
+  --datasets-yaml "${DATASETS_YAML}" \
   --project-id "${PROJECT_ID}" --dataset-id "${DATASET_ID}") || live_sql=""
 
 ts "Collecting live results-view dataset names for cross-check..."
@@ -82,8 +79,8 @@ fi
 if [ -z "${live_datasets}" ]; then
   ts "ERROR: could not read live results-view dataset names - the registry cross-check cannot run."
   ts "       Check credentials, quota and that the views exist in ${PROJECT_ID}.${DATASET_ID}."
-  ts "       A live_dataset_scope.py error above means a view api/main.py exposes has no"
-  ts "       dataset-bearing column and is not in its EXCLUDED_VIEWS list."
+  ts "       A live_dataset_scope.py error above means a view datasets.yaml exposes has no"
+  ts "       dataset-bearing column and no dataset_cross_check.excluded_reason in that file."
   if [ "${ALLOW_UNVALIDATED:-0}" != "1" ]; then
     ts "       Refusing to load unvalidated. Set ALLOW_UNVALIDATED=1 to override."
     exit 1
@@ -124,8 +121,4 @@ ts "=== Metadata loading complete ==="
 
 echo ""
 ts "Table row counts:"
-for table in phenotypes datasets; do
-  count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
-    "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.${table}\`" 2>/dev/null | tail -1) || count="error"
-  ts "  ${table}: ${count} rows"
-done
+report_row_counts phenotypes datasets

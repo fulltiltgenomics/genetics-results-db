@@ -12,124 +12,80 @@ failed OPEN for precisely the case where drift is most likely. That is not hypot
 hla_associations landed with dataset = 'finngen_hla' and the loader ran clean while the
 `datasets` table had zero rows for it.
 
-The scope is therefore derived from the same VIEWS list api/main.py exposes. Anything the API
-lets an agent query is in scope, so a new view puts its `dataset` values in front of the
-cross-check the moment it is exposed, and an unmapped value fails the build.
+The scope is therefore derived from configs/datasets.yaml, through the same load_views() the
+API derives VIEWS from: the scope follows EXPOSURE, not mere documentation. A documented but
+unexposed table is unreachable, and it need not even exist in BigQuery yet, so demanding a
+dataset-bearing column from it would fail the build for a table nobody can query. Exposing it
+is what puts its `dataset` values in front of the cross-check, and an unmapped value then
+fails the build.
 
-Views are excluded only by an entry in EXCLUDED_VIEWS carrying a reason. A view that is not
-excluded and has no dataset-bearing column FAILS - being skipped for lack of a column is the
-same fail-open trap one level down.
+A view leaves the scope only through `tables.<view>.dataset_cross_check.excluded_reason` in
+that same config, so the exclusion and the reason for it are stored where the view is defined.
+A view that is not excluded and has no dataset-bearing column FAILS - being skipped for lack
+of a column is the same fail-open trap one level down.
 """
 
 import argparse
-import ast
 import csv
 import io
+import os
 import sys
 
-# views exposed by api/main.py that contribute no `dataset` values to the cross-check.
-# An entry here is a decision with a reason attached; a view merely forgotten is an error.
-EXCLUDED_VIEWS = {
-    "gene_annotations_v": "gene coordinate reference (Ensembl/GENCODE), has no `dataset` column",
-    "variant_annotation_v": "variant annotation reference, has no `dataset` column; its own "
-                            "view SQL notes it carries no dataset discriminator",
-    "phenotypes_v": "built by build_phenotypes.py from the same mapping this check validates - "
-                    "including it would make the check circular and self-confirming",
-    "datasets_v": "built by build_phenotypes.py from the same mapping this check validates - "
-                  "including it would make the check circular and self-confirming",
-}
+import yaml
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+from api.yaml_loader import (  # noqa: E402
+    load_dataset_cross_check_exclusions,
+    load_views,
+)
 
 # columns that hold a results-view `dataset` value. colocalization pairs two datasets per row
 # and has no bare `dataset` column, so both sides must be collected or half its datasets are
 # invisible to the check.
 DATASET_COLUMNS = ("dataset", "dataset1", "dataset2")
 
-_VIEWS_NAME = "VIEWS"
+
+def _read_config(datasets_yaml_path):
+    """Parse datasets.yaml, raising ValueError so main() reports a diagnosis rather than a
+    traceback the caller's own error message then misattributes."""
+    try:
+        with open(datasets_yaml_path) as handle:
+            return yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError) as error:
+        raise ValueError(f"cannot read {datasets_yaml_path}: {error}") from error
 
 
-def _top_level_binding(module):
-    """Return the (target node, value node) of a top-level `VIEWS = ...` / `VIEWS: t = ...`."""
-    found = None
-    for node in module.body:
-        if isinstance(node, ast.Assign):
-            targets = [t for t in node.targets
-                       if isinstance(t, ast.Name) and t.id == _VIEWS_NAME]
-        elif (isinstance(node, ast.AnnAssign) and node.value is not None
-                and isinstance(node.target, ast.Name) and node.target.id == _VIEWS_NAME):
-            targets = [node.target]
-        else:
-            continue
-        if not targets:
-            continue
-        if found is not None:
-            raise ValueError(
-                f"`{_VIEWS_NAME}` is assigned more than once at module level (line "
-                f"{targets[0].lineno}) - which assignment wins is not something this parser "
-                "may guess. Bind it once as a list literal.")
-        found = (targets[0], node.value)
-    return found
+def excluded_views(datasets_yaml_path):
+    """Map each view excluded from this cross-check to its reason.
+
+    An exclusion is a decision with a reason attached, and it lives beside the view in
+    datasets.yaml; a view merely forgotten is an error, which build_union_sql raises.
+    """
+    return load_dataset_cross_check_exclusions(_read_config(datasets_yaml_path))
 
 
-def parse_views(source):
-    """Extract the VIEWS list literal from api/main.py source text.
+def views_in_scope(datasets_yaml_path):
+    """Read the exposed view names out of datasets.yaml.
 
-    Parsed rather than imported: importing api.main constructs a BigQuery client and loads
-    datasets.yaml, neither of which the loader should need in order to know the view names.
+    Read through the API's own loader rather than from api/main.py's source text, so both ends
+    apply one definition of "exposed" to one registry and neither can be parsed short. They
+    still read separate copies of the file (see docs/project-spec.md), so being in step is a
+    property of the sync, not of this call.
 
-    Parsed with ast rather than a regex because a regex over the literal returns a SHORT list
-    for `VIEWS = [...] + EXTRA`, `VIEWS.append(...)` and `VIEWS += [...]` - and a short list is
-    not a crash. It yields valid SQL over fewer views, the loader runs clean, and the omitted
-    views' `dataset` values are invisible to the cross-check: the same fail-open this module
-    exists to close, reintroduced one level up. So anything that makes the literal an
-    incomplete account of VIEWS is an error here, not a truncation.
+    An unreadable or malformed config is raised as a ValueError so main() reports it as a
+    diagnosis rather than a traceback the caller's own error message then misattributes.
     """
     try:
-        module = ast.parse(source)
-    except SyntaxError as error:
-        raise ValueError(f"could not parse the VIEWS source file: {error}") from error
-
-    binding = _top_level_binding(module)
-    if binding is None:
-        raise ValueError(
-            f"could not find a top-level `{_VIEWS_NAME} = [...]` list - if api/main.py now "
-            "builds VIEWS some other way, update parse_views() rather than hardcoding view "
-            "names")
-    target, value = binding
-
-    mutators = sorted({node.func.attr for node in ast.walk(module)
-                       if isinstance(node, ast.Call)
-                       and isinstance(node.func, ast.Attribute)
-                       and isinstance(node.func.value, ast.Name)
-                       and node.func.value.id == _VIEWS_NAME})
-    if mutators:
-        raise ValueError(
-            f"`{_VIEWS_NAME}` is used as the receiver of "
-            + ", ".join(f"{_VIEWS_NAME}.{name}()" for name in mutators)
-            + f", so the list literal is not the full set of exposed views. Build {_VIEWS_NAME}"
-            " as one literal, or teach parse_views() how to resolve it - a short list here "
-            "silently narrows the cross-check instead of failing it.")
-
-    rebinds = [node for node in ast.walk(module)
-               if isinstance(node, ast.Name) and node.id == _VIEWS_NAME
-               and isinstance(node.ctx, (ast.Store, ast.Del)) and node is not target]
-    if rebinds:
-        raise ValueError(
-            f"`{_VIEWS_NAME}` is rebound or extended at line(s) "
-            + ", ".join(str(node.lineno) for node in rebinds)
-            + " (`+=`, a loop target, a `del`, …), so the list literal is not the full set of "
-            "exposed views. Bind it once as a literal, or update parse_views().")
-
-    if not isinstance(value, ast.List) or not all(
-            isinstance(item, ast.Constant) and isinstance(item.value, str)
-            for item in value.elts):
-        raise ValueError(
-            f"top-level `{_VIEWS_NAME}` is not a plain list of string literals (found "
-            f"{type(value).__name__}) - a computed VIEWS cannot be read statically. Keep it a "
-            "literal, or update parse_views() rather than hardcoding view names.")
-
-    views = [item.value for item in value.elts]
+        with open(datasets_yaml_path) as handle:
+            config = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError) as error:
+        raise ValueError(f"cannot read {datasets_yaml_path}: {error}") from error
+    views = load_views(config or {})
     if not views:
-        raise ValueError(f"parsed {_VIEWS_NAME} is an empty list of names")
+        raise ValueError(
+            f"no views marked `exposed: true` in {datasets_yaml_path} - the cross-check scope "
+            "would be empty, which narrows the check instead of failing it")
     return views
 
 
@@ -151,17 +107,20 @@ def dataset_columns_for(view, columns_by_view):
     return [c for c in DATASET_COLUMNS if c in columns_by_view.get(view, set())]
 
 
-def build_union_sql(views, columns_by_view, project_id, dataset_id):
+def build_union_sql(views, columns_by_view, project_id, dataset_id, excluded):
     """Return SQL producing one comma-joined string of every live `dataset` value.
 
-    Raises when an in-scope view has no dataset-bearing column: either it belongs in
-    EXCLUDED_VIEWS with a reason, or the column dump is incomplete (bad auth, wrong dataset),
-    and silently narrowing the scope is exactly the failure this module exists to remove.
+    `excluded` is the reason-per-view map from excluded_views(); it is passed in rather than
+    read here so the scope of one run comes from one read of one config.
+
+    Raises when an in-scope view has no dataset-bearing column: either it needs an exclusion
+    with a reason, or the column dump is incomplete (bad auth, wrong dataset), and silently
+    narrowing the scope is exactly the failure this module exists to remove.
     """
     selects = []
     missing = []
     for view in views:
-        if view in EXCLUDED_VIEWS:
+        if view in excluded:
             continue
         columns = dataset_columns_for(view, columns_by_view)
         if not columns:
@@ -174,8 +133,9 @@ def build_union_sql(views, columns_by_view, project_id, dataset_id):
         raise ValueError(
             "no dataset-bearing column found for: " + ", ".join(sorted(missing)) +
             f". Expected one of {', '.join(DATASET_COLUMNS)}. Either the column dump is "
-            "incomplete, or the view genuinely has no `dataset` column - in which case add "
-            "it to EXCLUDED_VIEWS in scripts/live_dataset_scope.py WITH A REASON.")
+            "incomplete, or the view genuinely has no `dataset` column - in which case give "
+            "it a `dataset_cross_check.excluded_reason` in configs/datasets.yaml, WITH A "
+            "REASON.")
     if not selects:
         raise ValueError("no in-scope views left - the cross-check would have nothing to do")
     return ("SELECT STRING_AGG(DISTINCT d, ',') FROM (\n    "
@@ -185,8 +145,8 @@ def build_union_sql(views, columns_by_view, project_id, dataset_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--views-file", required=True,
-                        help="Path to api/main.py, the source of the exposed VIEWS list")
+    parser.add_argument("--datasets-yaml", required=True,
+                        help="Path to configs/datasets.yaml, the registry of exposed views")
     parser.add_argument("--columns-csv", default="-",
                         help="table_name,column_name CSV from INFORMATION_SCHEMA.COLUMNS "
                              "('-' reads stdin)")
@@ -194,12 +154,12 @@ def main():
     parser.add_argument("--dataset-id", required=True)
     args = parser.parse_args()
 
-    with open(args.views_file) as handle:
-        views = parse_views(handle.read())
     text = sys.stdin.read() if args.columns_csv == "-" else open(args.columns_csv).read()
 
     try:
-        sql = build_union_sql(views, parse_columns_csv(text), args.project_id, args.dataset_id)
+        views = views_in_scope(args.datasets_yaml)
+        sql = build_union_sql(views, parse_columns_csv(text), args.project_id, args.dataset_id,
+                              excluded_views(args.datasets_yaml))
     except ValueError as error:
         sys.exit(f"ERROR: {error}")
     print(sql)

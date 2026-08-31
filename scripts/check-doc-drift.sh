@@ -37,8 +37,8 @@ check '^schemas/' '^docs/project-spec\.md$' \
 check '^api/' "$DOCS_SPEC" \
     'api/ -> docs/project-spec.md + README.md (endpoint table, query params, env vars, auth)'
 
-check '^scripts/(load_[a-z_]*|setup_bigquery)\.sh$' "$DOCS_SPEC" \
-    'loader/setup scripts -> README.md + docs/project-spec.md (loader list, setup steps, GCS defaults)'
+check '^scripts/(load_[a-z_]*\.sh$|setup_bigquery\.sh$|lib/)' "$DOCS_SPEC" \
+    'loader/setup scripts + scripts/lib -> README.md + docs/project-spec.md (loader list, setup steps, GCS defaults, shared prefix rule)'
 
 check '^configs/datasets\.yaml$' '^docs/project-spec\.md$' \
     'configs/datasets.yaml -> docs/project-spec.md (dataset/resource config; this copy is GENERATED — genetics-results-suite is canonical, update its docs too)'

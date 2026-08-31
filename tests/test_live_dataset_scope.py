@@ -14,13 +14,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from live_dataset_scope import (  # noqa: E402
     DATASET_COLUMNS,
-    EXCLUDED_VIEWS,
     build_union_sql,
+    excluded_views,
     parse_columns_csv,
-    parse_views,
+    views_in_scope,
 )
 
-API_MAIN = os.path.join(os.path.dirname(__file__), "..", "api", "main.py")
+DATASETS_YAML = os.path.join(os.path.dirname(__file__), "..", "configs", "datasets.yaml")
+EXCLUDED = excluded_views(DATASETS_YAML)
 
 COLUMNS = parse_columns_csv(
     "table_name,column_name\n"
@@ -33,10 +34,9 @@ COLUMNS = parse_columns_csv(
 )
 
 
-def test_views_are_parsed_from_the_real_api_module():
-    """The scope must come from what api/main.py actually exposes, not a copy of it."""
-    with open(API_MAIN) as handle:
-        views = parse_views(handle.read())
+def test_views_come_from_the_real_config():
+    """The scope must come from the registry the API exposes, not a copy of it."""
+    views = views_in_scope(DATASETS_YAML)
     assert "credible_sets_v" in views
     assert "hla_associations_v" in views
     assert all(v.endswith("_v") for v in views)
@@ -45,37 +45,35 @@ def test_views_are_parsed_from_the_real_api_module():
 def test_a_new_view_enters_scope_without_being_listed_anywhere():
     """The point of deriving the scope: exposing a view is enough to put it in the check."""
     sql = build_union_sql(
-        ["credible_sets_v", "hla_associations_v"], COLUMNS, "proj", "ds")
+        ["credible_sets_v", "hla_associations_v"], COLUMNS, "proj", "ds", EXCLUDED)
     assert "`proj.ds.hla_associations_v`" in sql
     assert "`proj.ds.credible_sets_v`" in sql
 
 
 def test_both_colocalization_sides_are_collected():
     """colocalization has no bare `dataset` column; collecting one side would hide half."""
-    sql = build_union_sql(["colocalization_v"], COLUMNS, "proj", "ds")
+    sql = build_union_sql(["colocalization_v"], COLUMNS, "proj", "ds", EXCLUDED)
     assert "SELECT dataset1 AS d" in sql
     assert "SELECT dataset2 AS d" in sql
 
 
 def test_excluded_views_are_skipped_and_carry_a_reason():
     sql = build_union_sql(
-        ["credible_sets_v", "phenotypes_v"], COLUMNS, "proj", "ds")
+        ["credible_sets_v", "phenotypes_v"], COLUMNS, "proj", "ds", EXCLUDED)
     assert "phenotypes_v" not in sql
-    assert all(isinstance(reason, str) and reason for reason in EXCLUDED_VIEWS.values())
+    assert all(isinstance(reason, str) and reason for reason in EXCLUDED.values())
 
 
 def test_self_referential_views_are_excluded():
     """phenotypes_v/datasets_v are built FROM the mapping under test; including them would
     make the cross-check confirm itself."""
-    assert "phenotypes_v" in EXCLUDED_VIEWS
-    assert "datasets_v" in EXCLUDED_VIEWS
+    assert "phenotypes_v" in EXCLUDED
+    assert "datasets_v" in EXCLUDED
 
 
 def test_every_excluded_view_is_actually_exposed():
     """An exclusion for a view that no longer exists is dead weight that hides the next one."""
-    with open(API_MAIN) as handle:
-        views = set(parse_views(handle.read()))
-    assert set(EXCLUDED_VIEWS) <= views
+    assert set(EXCLUDED) <= set(views_in_scope(DATASETS_YAML))
 
 
 def test_missing_dataset_column_fails_loudly_rather_than_being_skipped():
@@ -86,22 +84,22 @@ def test_missing_dataset_column_fails_loudly_rather_than_being_skipped():
     """
     with pytest.raises(ValueError) as excinfo:
         build_union_sql(
-            ["credible_sets_v", "future_reference_v"], COLUMNS, "proj", "ds")
+            ["credible_sets_v", "future_reference_v"], COLUMNS, "proj", "ds",
+            EXCLUDED)
     assert "future_reference_v" in str(excinfo.value)
-    assert "EXCLUDED_VIEWS" in str(excinfo.value)
+    assert "dataset_cross_check.excluded_reason" in str(excinfo.value)
 
 
 def test_empty_column_dump_fails_rather_than_producing_an_empty_scope():
     with pytest.raises(ValueError):
-        build_union_sql(["credible_sets_v"], {}, "proj", "ds")
+        build_union_sql(["credible_sets_v"], {}, "proj", "ds", EXCLUDED)
 
 
 def test_all_exposed_views_are_either_excluded_or_have_a_dataset_column():
     """The live shape of the schema, asserted against the checked-in view SQL: every view
-    api/main.py exposes is either excluded with a reason or contributes dataset values."""
+    the config exposes is either excluded with a reason or contributes dataset values."""
     schemas = os.path.join(os.path.dirname(__file__), "..", "schemas")
-    with open(API_MAIN) as handle:
-        views = parse_views(handle.read())
+    views = views_in_scope(DATASETS_YAML)
     columns = {}
     for view in views:
         base = os.path.join(schemas, f"{view.removesuffix('_v')}.sql")
@@ -112,7 +110,7 @@ def test_all_exposed_views_are_either_excluded_or_have_a_dataset_column():
         found = {c for c in DATASET_COLUMNS if f"\n  {c} STRING" in text}
         if found:
             columns[view] = found
-    sql = build_union_sql(views, columns, "proj", "ds")
+    sql = build_union_sql(views, columns, "proj", "ds", EXCLUDED)
     assert "hla_associations_v" in sql
     assert "peak_to_gene_v" in sql
 
@@ -122,38 +120,33 @@ def test_bq_csv_header_is_not_mistaken_for_a_column():
     assert parsed == {"credible_sets_v": {"dataset"}}
 
 
-def test_unparseable_views_list_is_an_error_not_an_empty_scope():
-    with pytest.raises(ValueError):
-        parse_views("VIEWS_BY_NAME = {}\n")
+def test_a_config_with_no_exposed_views_is_an_error_not_an_empty_scope(tmp_path):
+    """An empty scope would pass the cross-check by having nothing to check."""
+    config = tmp_path / "datasets.yaml"
+    config.write_text("resources: {}\ntables: {}\n")
+    with pytest.raises(ValueError, match="exposed"):
+        views_in_scope(str(config))
 
 
-@pytest.mark.parametrize("source", [
-    'VIEWS = ["a_v", "b_v"] + EXTRA_VIEWS\n',
-    'VIEWS = ["a_v", "b_v"]\nVIEWS.append("c_v")\n',
-    'VIEWS = ["a_v", "b_v"]\nVIEWS.extend(EXTRA_VIEWS)\n',
-    'VIEWS = ["a_v", "b_v"]\nVIEWS += ["c_v"]\n',
-    'VIEWS = ["a_v", "b_v"]\nVIEWS = VIEWS + ["c_v"]\n',
-], ids=["concat", "append", "extend", "augmented-assign", "rebind"])
-def test_views_assembled_in_pieces_fails_rather_than_parsing_short(source):
-    """A SHORT list is the dangerous outcome, not a missing one.
-
-    Each of these used to parse to ['a_v', 'b_v'] with no error: valid SQL over fewer views,
-    a loader that runs clean, and the omitted views' dataset values invisible to the check.
-    """
-    with pytest.raises(ValueError) as excinfo:
-        parse_views(source)
-    assert "VIEWS" in str(excinfo.value)
+def test_a_documented_but_unexposed_table_is_out_of_scope(tmp_path):
+    config = tmp_path / "datasets.yaml"
+    config.write_text(
+        "tables:\n"
+        "  shown_v:\n"
+        "    exposed: true\n"
+        "    description: x\n"
+        "  hidden_v:\n"
+        "    description: x\n"
+    )
+    assert views_in_scope(str(config)) == ["shown_v"]
 
 
-def test_annotated_views_literal_is_accepted():
-    """`VIEWS: list[str] = [...]` is the same literal; the old regex rejected it outright."""
-    assert parse_views('VIEWS: list[str] = ["a_v", "b_v"]\n') == ["a_v", "b_v"]
-
-
-def test_the_real_api_module_parses_to_its_full_view_list():
-    """Guards the parser against being strict in the wrong direction: the checks above must
-    reject assembled lists without rejecting the literal api/main.py actually ships."""
-    with open(API_MAIN) as handle:
-        views = parse_views(handle.read())
-    assert len(views) == len(set(views))
-    assert len(views) >= len(EXCLUDED_VIEWS) + 10  # every exclusion, plus the result views
+def test_a_malformed_config_is_diagnosed_rather_than_raising_a_traceback(tmp_path):
+    """main() only translates ValueError, so anything else reaches the operator as a
+    traceback under a caller message that misattributes the cause."""
+    config = tmp_path / "datasets.yaml"
+    config.write_text("tables: [unclosed\n")
+    with pytest.raises(ValueError, match="cannot read"):
+        views_in_scope(str(config))
+    with pytest.raises(ValueError, match="cannot read"):
+        views_in_scope(str(tmp_path / "absent.yaml"))

@@ -38,7 +38,7 @@ violate this; it runs from the `pre-commit` hook.
 |---|---|---|
 | `schemas/**` | `docs/project-spec.md` | data model column tables, partition/cluster clauses, view columns |
 | `api/**` | `docs/project-spec.md`, `README.md` | endpoint table, query parameters, env-var tables, authentication |
-| `scripts/load_*.sh`, `scripts/setup_bigquery.sh` | `README.md`, `docs/project-spec.md` | loader list, setup steps, GCS bucket/prefix defaults |
+| `scripts/load_*.sh`, `scripts/setup_bigquery.sh`, `scripts/lib/**` | `README.md`, `docs/project-spec.md` | loader list, setup steps, GCS bucket/prefix defaults and the `unset-only`/`unset-or-empty` prefix rule every loader shares |
 | `configs/datasets.yaml` | `docs/project-spec.md` | dataset/resource config — this copy is generated, see below |
 
 A doc is stale the moment it *enumerates* something the code no longer matches.
@@ -53,7 +53,8 @@ documents only itself, so a change here can leave that repo's docs wrong in a wa
 doc or check in this repo can detect.
 
 Adding or changing a BigQuery view or table here also requires updating
-`../genetics-results-suite/docs/adding-datasets.md` (the `ALL_VIEWS` list) and
+`../genetics-results-suite/docs/adding-datasets.md` (the per-view `resource_derivation`
+and `dataset_cross_check` decisions) and
 `../genetics-results-suite/docs/project-spec.md`.
 
 

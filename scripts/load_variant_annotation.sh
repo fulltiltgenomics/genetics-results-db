@@ -8,17 +8,14 @@
 
 set -euo pipefail
 
-ts() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-finngen-commons}"
-GCS_PREFIX="${GCS_PREFIX-results_api_data/}"
+GCS_PREFIX="$(resolve_gcs_prefix unset-only "results_api_data/")"
 VA_FILE="${VA_FILE:-variant_annotations/R14_annotated_variants_v0.small.gz}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 gcs_uri="gs://${GCS_BUCKET}/${GCS_PREFIX}${VA_FILE}"
 
@@ -42,6 +39,4 @@ ts "=== variant annotation loading complete ==="
 
 echo ""
 ts "Table row count:"
-count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
-  "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.variant_annotation\`" 2>/dev/null | tail -1) || count="error"
-ts "  variant_annotation: ${count} rows"
+report_row_counts variant_annotation

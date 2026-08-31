@@ -19,35 +19,36 @@ REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 DEFAULT_YAML = os.path.join(REPO_ROOT, "..", "genetics-results-suite", "configs", "datasets.yaml")
 SCHEMAS_DIR = os.path.join(REPO_ROOT, "schemas")
 
-ALL_VIEWS = [
-    "credible_sets_v",
-    "colocalization_v",
-    "coloc_credsets_v",
-    "exome_variant_results_v",
-    "gene_burden_results_v",
-    "asm_qtl_v",
-    "open_chromatin_v",
-    "variant_effect_v",
-    "mpra_v",
-    "peak_to_gene_v",
-    "hla_associations_v",
-]
+sys.path.insert(0, REPO_ROOT)
+
+from api.yaml_loader import load_resource_derivation  # noqa: E402
 
 # colocalization_v maps dataset1->resource1 and dataset2->resource2
 COLOC_PAIRS = [("dataset1", "resource1"), ("dataset2", "resource2")]
 
-# views whose `resource` is a STORED column on the base table rather than a CASE in the
-# view SQL, because it is a clustering key (a view-derived column prunes nothing).
-# scripts/load_data.py calls generate_for_view() for these at load time, so the rules
-# still have a single source of truth — but there is no CASE in the .sql file to lint,
-# and the rules only reach the data through a reload or backfill.
-MATERIALIZED_RESOURCE_VIEWS = {"credible_sets_v"}
+
+def load_config(yaml_path):
+    with open(yaml_path) as f:
+        return yaml.safe_load(f)
 
 
 def load_rules(yaml_path):
-    with open(yaml_path) as f:
-        data = yaml.safe_load(f)
-    return data["dataset_to_resource_rules"]
+    return load_config(yaml_path)["dataset_to_resource_rules"]
+
+
+def resource_derivation(yaml_path):
+    """Split the registry's views by how their `resource` column is produced.
+
+    Returns (lintable, materialized): the views this script generates a CASE for, and the
+    subset of those whose CASE is applied at load time so the view SQL must contain none.
+    Both come from `tables.<view>.resource_derivation` in datasets.yaml, where each view that
+    opts out records why — so the scope of `lint` is a query against the registry rather than
+    a list here that a new view has to be remembered into.
+    """
+    modes = load_resource_derivation(load_config(yaml_path))
+    lintable = [name for name, mode in modes.items() if mode != "none"]
+    materialized = {name for name, mode in modes.items() if mode == "load_time"}
+    return lintable, materialized
 
 
 def rules_for_view(rules, view_name):
@@ -148,7 +149,7 @@ def extract_case_blocks(sql_text):
     return results
 
 
-def lint_view(rules, view_name, schemas_dir):
+def lint_view(rules, view_name, schemas_dir, materialized):
     """Compare generated fragment against existing SQL file.
 
     Returns (ok, message).
@@ -162,13 +163,13 @@ def lint_view(rules, view_name, schemas_dir):
 
     existing_blocks = extract_case_blocks(sql_text)
 
-    if view_name in MATERIALIZED_RESOURCE_VIEWS:
+    if view_name in materialized:
         # a CASE reappearing here means someone re-derived a stored clustering key
         if existing_blocks:
             return False, (
                 f"  {view_name}: resource is a STORED column on the base table, but the "
-                f"view SQL still contains a CASE block — remove it (see "
-                f"MATERIALIZED_RESOURCE_VIEWS)"
+                f"view SQL still contains a CASE block — remove it (its "
+                f"`resource_derivation.mode` in datasets.yaml is `load_time`)"
             )
         return True, f"  {view_name}: OK (resource materialized at load time)"
 
@@ -210,16 +211,20 @@ def indent_block(text, spaces):
 
 
 def cmd_generate(args):
-    rules = load_rules(args.yaml)
-    print(generate_for_view(rules, args.view))
+    lintable, _ = resource_derivation(args.yaml)
+    if args.view not in lintable:
+        sys.exit(f"ERROR: {args.view} has no `resource` derived from a `dataset` "
+                 f"discriminator in {args.yaml}. Views that do: {', '.join(sorted(lintable))}")
+    print(generate_for_view(load_rules(args.yaml), args.view))
 
 
 def cmd_lint(args):
     rules = load_rules(args.yaml)
+    lintable, materialized = resource_derivation(args.yaml)
     schemas = args.schemas_dir or SCHEMAS_DIR
     all_ok = True
-    for view in ALL_VIEWS:
-        ok, msg = lint_view(rules, view, schemas)
+    for view in lintable:
+        ok, msg = lint_view(rules, view, schemas, materialized)
         print(msg)
         if not ok:
             all_ok = False
@@ -245,7 +250,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     gen = sub.add_parser("generate", help="Output CASE/WHEN fragment for a view")
-    gen.add_argument("view", choices=ALL_VIEWS, help="View name")
+    gen.add_argument("view", help="View name (any view with a dataset-derived `resource`)")
     gen.set_defaults(func=cmd_generate)
 
     lint = sub.add_parser("lint", help="Check all SQL views match YAML rules")

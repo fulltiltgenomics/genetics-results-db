@@ -11,23 +11,19 @@
 
 set -euo pipefail
 
-ts() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-finngen-commons}"
-# no colon: only an UNSET prefix takes the default, so an explicitly empty
-# GCS_PREFIX="" is honored (for daly the mapping files live at mapping_files/)
-GCS_PREFIX="${GCS_PREFIX-results_api_data/mapping_files/}"
+GCS_PREFIX="$(resolve_gcs_prefix unset-only "results_api_data/mapping_files/")"
 
 GENCODE_VERSION="${GENCODE_VERSION:-49}"
 HGNC_VERSION="${HGNC_VERSION:?set HGNC_VERSION (e.g. 2026-06-01)}"
 # GCS path used to stage the generated NDJSON before the BigQuery load
 STAGING_URI="${STAGING_URI:-gs://${GCS_BUCKET}/${GCS_PREFIX}gene_annotations.ndjson}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE="gs://${GCS_BUCKET}/${GCS_PREFIX}"
 
 ts "Building gene_annotations NDJSON -> ${STAGING_URI}"
@@ -56,6 +52,4 @@ sed "s/genetics_results/${PROJECT_ID}.${DATASET_ID}/g" "${SCRIPT_DIR}/../schemas
   bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --nouse_cache
 
 ts "=== gene_annotations load complete ==="
-count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
-  "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.gene_annotations\`" 2>/dev/null | tail -1) || count="error"
-ts "  gene_annotations: ${count} rows"
+report_row_counts gene_annotations

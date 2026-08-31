@@ -23,10 +23,10 @@ def _load_yaml() -> dict[str, Any] | None:
         with open(path) as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
-        logger.warning("datasets.yaml not found at %s, using hardcoded fallback", path)
+        logger.error("datasets.yaml not found at %s; service will fail to start", path)
         return None
     except Exception:
-        logger.exception("Failed to parse datasets.yaml at %s, using hardcoded fallback", path)
+        logger.exception("Failed to parse datasets.yaml at %s; service will fail to start", path)
         return None
 
 
@@ -81,6 +81,79 @@ def load_collection_resource_prefixes(config: dict[str, Any]) -> dict[str, dict[
     return result
 
 
+def load_views(config: dict[str, Any]) -> list[str]:
+    """Build VIEWS from the tables section — the names the API exposes.
+
+    The `tables` block is a documentation registry first: the sandbox schema docs are
+    generated from every entry in it. Reachability is a separate, explicit per-table
+    decision, and it fails closed — an entry without `exposed: true` is documented and
+    unreachable — so the allow-list cannot widen by someone adding a table or omitting
+    a field.
+    """
+    tables = config.get("tables") or {}
+    return [name for name, info in tables.items() if (info or {}).get("exposed") is True]
+
+
+RESOURCE_DERIVATION_MODES = ("view_case", "load_time", "none")
+
+
+def load_resource_derivation(config: dict[str, Any]) -> dict[str, str]:
+    """Map every table to how its `resource` column is produced.
+
+    `view_case`  — a CASE generated from `dataset_to_resource_rules` sits in the view SQL and
+                   is linted against the rules;
+    `load_time`  — the same CASE is applied by the loader and stored on the base table, so the
+                   view SQL must contain none;
+    `none`       — `resource` is not derived from a `dataset` discriminator at all, and the
+                   entry says why.
+
+    A missing or unknown mode raises rather than defaulting: a view that drops out of the lint
+    scope silently is a CASE nobody compares against the rules.
+    """
+    tables = config.get("tables") or {}
+    result: dict[str, str] = {}
+    for name, info in tables.items():
+        entry = (info or {}).get("resource_derivation")
+        entry = entry if isinstance(entry, dict) else {}
+        mode = entry.get("mode")
+        if mode not in RESOURCE_DERIVATION_MODES:
+            raise ValueError(
+                f"tables.{name}: `resource_derivation.mode` must be one of "
+                f"{', '.join(RESOURCE_DERIVATION_MODES)}, got {mode!r}")
+        if mode != "view_case" and not str(entry.get("reason") or "").strip():
+            raise ValueError(
+                f"tables.{name}: `resource_derivation.mode: {mode}` needs a `reason` — an "
+                "exception with no reason cannot be told apart from an oversight")
+        result[name] = mode
+    return result
+
+
+def load_dataset_cross_check_exclusions(config: dict[str, Any]) -> dict[str, str]:
+    """Map each table excluded from the live `dataset`-value cross-check to its reason.
+
+    Presence of the key is the opt-in, so an empty or null block raises rather than quietly
+    reading as "not excluded" — that is the same shape as a blank reason.
+
+    Exclusion is opt-in and reason-bearing, and it is a different question from
+    `resource_derivation`: a view can carry a `dataset` column the check needs while its
+    `resource` is a constant, and vice versa.
+    """
+    tables = config.get("tables") or {}
+    result: dict[str, str] = {}
+    for name, info in tables.items():
+        info = info or {}
+        if "dataset_cross_check" not in info:
+            continue
+        entry = info["dataset_cross_check"]
+        entry = entry if isinstance(entry, dict) else {}
+        reason = str(entry.get("excluded_reason") or "").strip()
+        if not reason:
+            raise ValueError(
+                f"tables.{name}: `dataset_cross_check` needs a non-empty `excluded_reason`")
+        result[name] = reason
+    return result
+
+
 def load_table_descriptions(config: dict[str, Any]) -> dict[str, str]:
     """Build _TABLE_DESCRIPTIONS from the tables section."""
     tables = config.get("tables", {})
@@ -127,7 +200,7 @@ def load_all() -> dict[str, Any] | None:
     """Load all data structures from YAML. Returns None if YAML is unavailable.
 
     On success returns a dict with keys:
-        resource_metadata, collection_resource_prefixes,
+        views, resource_metadata, collection_resource_prefixes,
         table_descriptions, column_descriptions,
         table_examples, categorical_columns
     """
@@ -136,6 +209,7 @@ def load_all() -> dict[str, Any] | None:
         return None
 
     return {
+        "views": load_views(config),
         "resource_metadata": load_resource_metadata(config),
         "collection_resource_prefixes": load_collection_resource_prefixes(config),
         "table_descriptions": load_table_descriptions(config),

@@ -19,11 +19,16 @@ SECRET = "test-internal-secret"
 
 @pytest.fixture(scope="module")
 def client():
-    os.environ["INTERNAL_API_SECRET"] = SECRET
-    os.environ.setdefault("PROJECT_ID", "test-project")
+    # Same pattern as test_sandbox_token_auth.py's `client` fixture: a module-scoped fixture
+    # cannot request the function-scoped `monkeypatch` fixture, so it owns a `pytest.MonkeyPatch()`
+    # directly and undoes it itself, rather than mutating os.environ with no teardown.
+    mp = pytest.MonkeyPatch()
+    mp.setenv("INTERNAL_API_SECRET", SECRET)
+    mp.setenv("PROJECT_ID", os.environ.get("PROJECT_ID", "test-project"))
     from api.main import app
 
-    return TestClient(app, raise_server_exceptions=False)
+    yield TestClient(app, raise_server_exceptions=False)
+    mp.undo()
 
 
 @pytest.fixture

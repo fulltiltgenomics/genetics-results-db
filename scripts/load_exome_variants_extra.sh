@@ -4,16 +4,13 @@
 
 set -euo pipefail
 
-ts() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project)}"
 DATASET_ID="${DATASET_ID:-genetics_results}"
 GCS_BUCKET="${GCS_BUCKET:-bucket-name}"
-GCS_PREFIX="${GCS_PREFIX:-}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GCS_PREFIX="$(resolve_gcs_prefix unset-or-empty "")"
 
 ts "Appending exome variant results into ${PROJECT_ID}.${DATASET_ID}.exome_variant_results"
 
@@ -42,6 +39,4 @@ done
 echo ""
 ts "=== Loading complete ==="
 
-count=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false --format=csv \
-  "SELECT COUNT(*) FROM \`${PROJECT_ID}.${DATASET_ID}.exome_variant_results\`" 2>/dev/null | tail -1) || count="error"
-ts "  exome_variant_results: ${count} rows"
+report_row_counts exome_variant_results
