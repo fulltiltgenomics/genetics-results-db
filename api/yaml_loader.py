@@ -94,6 +94,66 @@ def load_views(config: dict[str, Any]) -> list[str]:
     return [name for name, info in tables.items() if (info or {}).get("exposed") is True]
 
 
+RESOURCE_DERIVATION_MODES = ("view_case", "load_time", "none")
+
+
+def load_resource_derivation(config: dict[str, Any]) -> dict[str, str]:
+    """Map every table to how its `resource` column is produced.
+
+    `view_case`  — a CASE generated from `dataset_to_resource_rules` sits in the view SQL and
+                   is linted against the rules;
+    `load_time`  — the same CASE is applied by the loader and stored on the base table, so the
+                   view SQL must contain none;
+    `none`       — `resource` is not derived from a `dataset` discriminator at all, and the
+                   entry says why.
+
+    A missing or unknown mode raises rather than defaulting: a view that drops out of the lint
+    scope silently is a CASE nobody compares against the rules.
+    """
+    tables = config.get("tables") or {}
+    result: dict[str, str] = {}
+    for name, info in tables.items():
+        entry = (info or {}).get("resource_derivation")
+        entry = entry if isinstance(entry, dict) else {}
+        mode = entry.get("mode")
+        if mode not in RESOURCE_DERIVATION_MODES:
+            raise ValueError(
+                f"tables.{name}: `resource_derivation.mode` must be one of "
+                f"{', '.join(RESOURCE_DERIVATION_MODES)}, got {mode!r}")
+        if mode != "view_case" and not str(entry.get("reason") or "").strip():
+            raise ValueError(
+                f"tables.{name}: `resource_derivation.mode: {mode}` needs a `reason` — an "
+                "exception with no reason cannot be told apart from an oversight")
+        result[name] = mode
+    return result
+
+
+def load_dataset_cross_check_exclusions(config: dict[str, Any]) -> dict[str, str]:
+    """Map each table excluded from the live `dataset`-value cross-check to its reason.
+
+    Presence of the key is the opt-in, so an empty or null block raises rather than quietly
+    reading as "not excluded" — that is the same shape as a blank reason.
+
+    Exclusion is opt-in and reason-bearing, and it is a different question from
+    `resource_derivation`: a view can carry a `dataset` column the check needs while its
+    `resource` is a constant, and vice versa.
+    """
+    tables = config.get("tables") or {}
+    result: dict[str, str] = {}
+    for name, info in tables.items():
+        info = info or {}
+        if "dataset_cross_check" not in info:
+            continue
+        entry = info["dataset_cross_check"]
+        entry = entry if isinstance(entry, dict) else {}
+        reason = str(entry.get("excluded_reason") or "").strip()
+        if not reason:
+            raise ValueError(
+                f"tables.{name}: `dataset_cross_check` needs a non-empty `excluded_reason`")
+        result[name] = reason
+    return result
+
+
 def load_table_descriptions(config: dict[str, Any]) -> dict[str, str]:
     """Build _TABLE_DESCRIPTIONS from the tables section."""
     tables = config.get("tables", {})

@@ -109,8 +109,9 @@ Accepted, already-approved costs:
   `resource` on the existing staging-table projection, so **the source TSVs do not
   change**. The `resource` `CASE` is generated at load time from `datasets.yaml` via
   `scripts/generate_resource_sql.py`, so the mapping still has one source of truth.
-- **`scripts/generate_resource_sql.py`** — `credible_sets_v` moves to
-  `MATERIALIZED_RESOURCE_VIEWS`; lint now asserts the view has *no* `CASE`.
+- **`scripts/generate_resource_sql.py`** — `credible_sets_v` becomes
+  `resource_derivation.mode: load_time` in `datasets.yaml`; lint now asserts the view has
+  *no* `CASE`.
 - **`scripts/setup_bigquery.sh`** — documentation and a confirmation gate on `--recreate`.
 
 > ### 🚨 Consequence: `setup_bigquery.sh` fails until §4.6 completes

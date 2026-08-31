@@ -14,13 +14,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from live_dataset_scope import (  # noqa: E402
     DATASET_COLUMNS,
-    EXCLUDED_VIEWS,
     build_union_sql,
+    excluded_views,
     parse_columns_csv,
     views_in_scope,
 )
 
 DATASETS_YAML = os.path.join(os.path.dirname(__file__), "..", "configs", "datasets.yaml")
+EXCLUDED = excluded_views(DATASETS_YAML)
 
 COLUMNS = parse_columns_csv(
     "table_name,column_name\n"
@@ -44,35 +45,35 @@ def test_views_come_from_the_real_config():
 def test_a_new_view_enters_scope_without_being_listed_anywhere():
     """The point of deriving the scope: exposing a view is enough to put it in the check."""
     sql = build_union_sql(
-        ["credible_sets_v", "hla_associations_v"], COLUMNS, "proj", "ds")
+        ["credible_sets_v", "hla_associations_v"], COLUMNS, "proj", "ds", EXCLUDED)
     assert "`proj.ds.hla_associations_v`" in sql
     assert "`proj.ds.credible_sets_v`" in sql
 
 
 def test_both_colocalization_sides_are_collected():
     """colocalization has no bare `dataset` column; collecting one side would hide half."""
-    sql = build_union_sql(["colocalization_v"], COLUMNS, "proj", "ds")
+    sql = build_union_sql(["colocalization_v"], COLUMNS, "proj", "ds", EXCLUDED)
     assert "SELECT dataset1 AS d" in sql
     assert "SELECT dataset2 AS d" in sql
 
 
 def test_excluded_views_are_skipped_and_carry_a_reason():
     sql = build_union_sql(
-        ["credible_sets_v", "phenotypes_v"], COLUMNS, "proj", "ds")
+        ["credible_sets_v", "phenotypes_v"], COLUMNS, "proj", "ds", EXCLUDED)
     assert "phenotypes_v" not in sql
-    assert all(isinstance(reason, str) and reason for reason in EXCLUDED_VIEWS.values())
+    assert all(isinstance(reason, str) and reason for reason in EXCLUDED.values())
 
 
 def test_self_referential_views_are_excluded():
     """phenotypes_v/datasets_v are built FROM the mapping under test; including them would
     make the cross-check confirm itself."""
-    assert "phenotypes_v" in EXCLUDED_VIEWS
-    assert "datasets_v" in EXCLUDED_VIEWS
+    assert "phenotypes_v" in EXCLUDED
+    assert "datasets_v" in EXCLUDED
 
 
 def test_every_excluded_view_is_actually_exposed():
     """An exclusion for a view that no longer exists is dead weight that hides the next one."""
-    assert set(EXCLUDED_VIEWS) <= set(views_in_scope(DATASETS_YAML))
+    assert set(EXCLUDED) <= set(views_in_scope(DATASETS_YAML))
 
 
 def test_missing_dataset_column_fails_loudly_rather_than_being_skipped():
@@ -83,14 +84,15 @@ def test_missing_dataset_column_fails_loudly_rather_than_being_skipped():
     """
     with pytest.raises(ValueError) as excinfo:
         build_union_sql(
-            ["credible_sets_v", "future_reference_v"], COLUMNS, "proj", "ds")
+            ["credible_sets_v", "future_reference_v"], COLUMNS, "proj", "ds",
+            EXCLUDED)
     assert "future_reference_v" in str(excinfo.value)
-    assert "EXCLUDED_VIEWS" in str(excinfo.value)
+    assert "dataset_cross_check.excluded_reason" in str(excinfo.value)
 
 
 def test_empty_column_dump_fails_rather_than_producing_an_empty_scope():
     with pytest.raises(ValueError):
-        build_union_sql(["credible_sets_v"], {}, "proj", "ds")
+        build_union_sql(["credible_sets_v"], {}, "proj", "ds", EXCLUDED)
 
 
 def test_all_exposed_views_are_either_excluded_or_have_a_dataset_column():
@@ -108,7 +110,7 @@ def test_all_exposed_views_are_either_excluded_or_have_a_dataset_column():
         found = {c for c in DATASET_COLUMNS if f"\n  {c} STRING" in text}
         if found:
             columns[view] = found
-    sql = build_union_sql(views, columns, "proj", "ds")
+    sql = build_union_sql(views, columns, "proj", "ds", EXCLUDED)
     assert "hla_associations_v" in sql
     assert "peak_to_gene_v" in sql
 

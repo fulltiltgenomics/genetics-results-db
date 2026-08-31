@@ -19,9 +19,10 @@ dataset-bearing column from it would fail the build for a table nobody can query
 is what puts its `dataset` values in front of the cross-check, and an unmapped value then
 fails the build.
 
-Views are excluded only by an entry in EXCLUDED_VIEWS carrying a reason. A view that is not
-excluded and has no dataset-bearing column FAILS - being skipped for lack of a column is the
-same fail-open trap one level down.
+A view leaves the scope only through `tables.<view>.dataset_cross_check.excluded_reason` in
+that same config, so the exclusion and the reason for it are stored where the view is defined.
+A view that is not excluded and has no dataset-bearing column FAILS - being skipped for lack
+of a column is the same fail-open trap one level down.
 """
 
 import argparse
@@ -34,24 +35,34 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from api.yaml_loader import load_views  # noqa: E402
-
-# exposed views that contribute no `dataset` values to the cross-check.
-# An entry here is a decision with a reason attached; a view merely forgotten is an error.
-EXCLUDED_VIEWS = {
-    "gene_annotations_v": "gene coordinate reference (Ensembl/GENCODE), has no `dataset` column",
-    "variant_annotation_v": "variant annotation reference, has no `dataset` column; its own "
-                            "view SQL notes it carries no dataset discriminator",
-    "phenotypes_v": "built by build_phenotypes.py from the same mapping this check validates - "
-                    "including it would make the check circular and self-confirming",
-    "datasets_v": "built by build_phenotypes.py from the same mapping this check validates - "
-                  "including it would make the check circular and self-confirming",
-}
+from api.yaml_loader import (  # noqa: E402
+    load_dataset_cross_check_exclusions,
+    load_views,
+)
 
 # columns that hold a results-view `dataset` value. colocalization pairs two datasets per row
 # and has no bare `dataset` column, so both sides must be collected or half its datasets are
 # invisible to the check.
 DATASET_COLUMNS = ("dataset", "dataset1", "dataset2")
+
+
+def _read_config(datasets_yaml_path):
+    """Parse datasets.yaml, raising ValueError so main() reports a diagnosis rather than a
+    traceback the caller's own error message then misattributes."""
+    try:
+        with open(datasets_yaml_path) as handle:
+            return yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError) as error:
+        raise ValueError(f"cannot read {datasets_yaml_path}: {error}") from error
+
+
+def excluded_views(datasets_yaml_path):
+    """Map each view excluded from this cross-check to its reason.
+
+    An exclusion is a decision with a reason attached, and it lives beside the view in
+    datasets.yaml; a view merely forgotten is an error, which build_union_sql raises.
+    """
+    return load_dataset_cross_check_exclusions(_read_config(datasets_yaml_path))
 
 
 def views_in_scope(datasets_yaml_path):
@@ -96,17 +107,20 @@ def dataset_columns_for(view, columns_by_view):
     return [c for c in DATASET_COLUMNS if c in columns_by_view.get(view, set())]
 
 
-def build_union_sql(views, columns_by_view, project_id, dataset_id):
+def build_union_sql(views, columns_by_view, project_id, dataset_id, excluded):
     """Return SQL producing one comma-joined string of every live `dataset` value.
 
-    Raises when an in-scope view has no dataset-bearing column: either it belongs in
-    EXCLUDED_VIEWS with a reason, or the column dump is incomplete (bad auth, wrong dataset),
-    and silently narrowing the scope is exactly the failure this module exists to remove.
+    `excluded` is the reason-per-view map from excluded_views(); it is passed in rather than
+    read here so the scope of one run comes from one read of one config.
+
+    Raises when an in-scope view has no dataset-bearing column: either it needs an exclusion
+    with a reason, or the column dump is incomplete (bad auth, wrong dataset), and silently
+    narrowing the scope is exactly the failure this module exists to remove.
     """
     selects = []
     missing = []
     for view in views:
-        if view in EXCLUDED_VIEWS:
+        if view in excluded:
             continue
         columns = dataset_columns_for(view, columns_by_view)
         if not columns:
@@ -119,8 +133,9 @@ def build_union_sql(views, columns_by_view, project_id, dataset_id):
         raise ValueError(
             "no dataset-bearing column found for: " + ", ".join(sorted(missing)) +
             f". Expected one of {', '.join(DATASET_COLUMNS)}. Either the column dump is "
-            "incomplete, or the view genuinely has no `dataset` column - in which case add "
-            "it to EXCLUDED_VIEWS in scripts/live_dataset_scope.py WITH A REASON.")
+            "incomplete, or the view genuinely has no `dataset` column - in which case give "
+            "it a `dataset_cross_check.excluded_reason` in configs/datasets.yaml, WITH A "
+            "REASON.")
     if not selects:
         raise ValueError("no in-scope views left - the cross-check would have nothing to do")
     return ("SELECT STRING_AGG(DISTINCT d, ',') FROM (\n    "
@@ -143,7 +158,8 @@ def main():
 
     try:
         views = views_in_scope(args.datasets_yaml)
-        sql = build_union_sql(views, parse_columns_csv(text), args.project_id, args.dataset_id)
+        sql = build_union_sql(views, parse_columns_csv(text), args.project_id, args.dataset_id,
+                              excluded_views(args.datasets_yaml))
     except ValueError as error:
         sys.exit(f"ERROR: {error}")
     print(sql)

@@ -84,7 +84,7 @@ if [ -z "${live_datasets}" ]; then
   ts "ERROR: could not read live results-view dataset names - the registry cross-check cannot run."
   ts "       Check credentials, quota and that the views exist in ${PROJECT_ID}.${DATASET_ID}."
   ts "       A live_dataset_scope.py error above means a view datasets.yaml exposes has no"
-  ts "       dataset-bearing column and is not in its EXCLUDED_VIEWS list."
+  ts "       dataset-bearing column and no dataset_cross_check.excluded_reason in that file."
   if [ "${ALLOW_UNVALIDATED:-0}" != "1" ]; then
     ts "       Refusing to load unvalidated. Set ALLOW_UNVALIDATED=1 to override."
     exit 1

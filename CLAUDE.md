@@ -53,7 +53,8 @@ documents only itself, so a change here can leave that repo's docs wrong in a wa
 doc or check in this repo can detect.
 
 Adding or changing a BigQuery view or table here also requires updating
-`../genetics-results-suite/docs/adding-datasets.md` (the `ALL_VIEWS` list) and
+`../genetics-results-suite/docs/adding-datasets.md` (the per-view `resource_derivation`
+and `dataset_cross_check` decisions) and
 `../genetics-results-suite/docs/project-spec.md`.
 
 
