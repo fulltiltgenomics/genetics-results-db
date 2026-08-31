@@ -23,10 +23,10 @@ def _load_yaml() -> dict[str, Any] | None:
         with open(path) as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
-        logger.warning("datasets.yaml not found at %s, using hardcoded fallback", path)
+        logger.error("datasets.yaml not found at %s; service will fail to start", path)
         return None
     except Exception:
-        logger.exception("Failed to parse datasets.yaml at %s, using hardcoded fallback", path)
+        logger.exception("Failed to parse datasets.yaml at %s; service will fail to start", path)
         return None
 
 
@@ -81,6 +81,19 @@ def load_collection_resource_prefixes(config: dict[str, Any]) -> dict[str, dict[
     return result
 
 
+def load_views(config: dict[str, Any]) -> list[str]:
+    """Build VIEWS from the tables section — the names the API exposes.
+
+    The `tables` block is a documentation registry first: the sandbox schema docs are
+    generated from every entry in it. Reachability is a separate, explicit per-table
+    decision, and it fails closed — an entry without `exposed: true` is documented and
+    unreachable — so the allow-list cannot widen by someone adding a table or omitting
+    a field.
+    """
+    tables = config.get("tables") or {}
+    return [name for name, info in tables.items() if (info or {}).get("exposed") is True]
+
+
 def load_table_descriptions(config: dict[str, Any]) -> dict[str, str]:
     """Build _TABLE_DESCRIPTIONS from the tables section."""
     tables = config.get("tables", {})
@@ -127,7 +140,7 @@ def load_all() -> dict[str, Any] | None:
     """Load all data structures from YAML. Returns None if YAML is unavailable.
 
     On success returns a dict with keys:
-        resource_metadata, collection_resource_prefixes,
+        views, resource_metadata, collection_resource_prefixes,
         table_descriptions, column_descriptions,
         table_examples, categorical_columns
     """
@@ -136,6 +149,7 @@ def load_all() -> dict[str, Any] | None:
         return None
 
     return {
+        "views": load_views(config),
         "resource_metadata": load_resource_metadata(config),
         "collection_resource_prefixes": load_collection_resource_prefixes(config),
         "table_descriptions": load_table_descriptions(config),

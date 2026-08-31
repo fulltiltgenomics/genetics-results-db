@@ -684,7 +684,7 @@ Notes:
   BigQuery's denial text stays out of the response on the plain ground that **the caller has no use for it** — it names a fully-qualified table the caller may never have written, and nothing they could do with it changes the outcome. It is *not* muted to close an enumeration oracle: the status code alone already separates "does not exist" (400) from "exists but denied" (403), the allow-list 403 echoes the resolved fully-qualified `disallowed` ids, and the `NotFound`/`BadRequest` branch returns `e.message` verbatim, which hands out `PROJECT_ID.DATASET_ID` for a bare name. The detail goes to the log. The `Forbidden` handler on the *execution* path is muted for the same "no use to the caller" reason, and is unreachable through caller-chosen tables anyway, since the gate has already proved every referenced table is allow-listed. Pinned by `tests/test_authorize_query_errors.py`, which stubs BigQuery (no credentials, runs by default) and asserts per exception type and per `reason` both the status code and that only the dry run was submitted.
 - When the caller passes `dry_run: true`, the authorization probe *is* the estimate — its `total_bytes_processed` is returned directly, so no second job is submitted.
 - `referencedTables` for a view query may name the view, its base table, or both, depending on how BigQuery expands it; both forms are in the allow-list.
-- The allow-list is derived from `VIEWS`, so adding a view exposes it automatically. A table that is loaded but has no view is **not** queryable through `/query`.
+- The allow-list is derived from `VIEWS`, which is itself derived from the `exposed: true` flags in `configs/datasets.yaml`'s `tables` block (`api/yaml_loader.load_views`). A `tables` entry only documents a view; the flag is what exposes it, and it defaults to closed. A table that is loaded but has no view, or a view without the flag, is **not** queryable through `/query`. `tests/test_exposed_views.py` pins the exposed set by name, so a widening fails it in CI — that is a test, not a deploy-path gate: the config reaches a running pod as a ConfigMap without it running.
 
 #### Other controls
 
@@ -879,7 +879,7 @@ genetics-results-db/
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   ├── load_phenotypes.sh         # Build + load phenotypes and datasets metadata tables (WRITE_TRUNCATE)
-│   ├── live_dataset_scope.py      # Derives the registry cross-check scope from api/main.py's VIEWS
+│   ├── live_dataset_scope.py      # Derives the registry cross-check scope from datasets.yaml
 │   ├── build_phenotypes.py        # Build phenotypes/datasets NDJSON from datasets.yaml + its metadata_file sources
 │   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
 ├── configs/
@@ -889,7 +889,7 @@ genetics-results-db/
 │   ├── main.py                # FastAPI application
 │   ├── sandbox_auth.py        # Per-execution sandbox JWT validation (the caps it gates are in main.py)
 │   ├── sandbox_budget.py      # Per-jti request-count/concurrency gate + its ASGI middleware
-│   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py
+│   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py, VIEWS included
 ├── tests/                     # All client-free unless noted; none needs BigQuery credentials
 │   ├── conftest.py            # Foreign-checkout guard + auth env restore
 │   ├── test_api_auth.py       # Shared-secret authentication tests (never reach BigQuery)
@@ -897,9 +897,10 @@ genetics-results-db/
 │   ├── test_build_gene_annotations.py  # gene_annotations build unit tests
 │   ├── test_build_phenotypes.py        # phenotypes/datasets NDJSON build unit tests
 │   ├── test_endpoint_access_log.py     # endpoint_access attribution rows
+│   ├── test_exposed_views.py           # pins the exposed view set / /query allow-list by name
 │   ├── test_hla_view_columns.py        # hla_associations_v select list vs base-table schema
 │   ├── test_internal_query_caps.py     # per-credential row/byte caps
-│   ├── test_live_dataset_scope.py      # registry cross-check scope derived from VIEWS
+│   ├── test_live_dataset_scope.py      # registry cross-check scope derived from datasets.yaml
 │   ├── test_load_data_row_counts.py    # load_table's (job, rows_written) contract
 │   ├── test_no_sql_rewriting.py        # asserts the deleted SQL-rewriting helpers stay deleted
 │   ├── test_query_caps.py              # /query row and byte limits
@@ -1035,7 +1036,7 @@ These four loaders default `GCS_BUCKET` to the placeholder `bucket-name`, so set
 - a `phenotypes` row keyed on a `dataset` no results table contains,
 - a name in `ABSENT_FROM_RESULTS` that has since become live.
 
-The **scope** of that cross-check is derived, not listed. `scripts/live_dataset_scope.py` parses the `VIEWS` list out of `api/main.py` (with `ast`, and strictly: if `VIEWS` is assembled rather than written as one list literal — `+ EXTRA`, `.append()`, `+=`, a rebind — the parse **fails** instead of returning the literal's short prefix, because a short list yields valid SQL over fewer views and hides the rest), reads `INFORMATION_SCHEMA.COLUMNS` for the `dataset` / `dataset1` / `dataset2` columns, and generates the `UNION ALL` the loader runs. Anything the API exposes is therefore in scope automatically: a newly added view puts its `dataset` values in front of the check the moment it is exposed, and an unmapped value fails the build. The earlier version unioned nine hardcoded table names, which meant a brand-new table contributed nothing and its drift could not be detected — the check failed *open* for exactly the case where drift is most likely. That is how `hla_associations` reached BigQuery with a `datasets` table holding zero `finngen_hla` rows while this loader reported success.
+The **scope** of that cross-check is derived, not listed. `scripts/live_dataset_scope.py` reads the exposed view names from `configs/datasets.yaml` through the same `api/yaml_loader.load_views` `api/main.py` derives `VIEWS` from, so one definition of "exposed" serves both. They read separate *copies* of that registry, though — the API reads the ConfigMap `deploy.sh` builds from the suite repo's canonical file at deploy time, this script reads the checkout's `sync-datasets.sh`-generated copy at run time — so the two agree only while the sync and the deploy are both current. It reads `INFORMATION_SCHEMA.COLUMNS` for the `dataset` / `dataset1` / `dataset2` columns, and generates the `UNION ALL` the loader runs. Anything the API exposes is therefore in scope automatically: a newly added view puts its `dataset` values in front of the check the moment it is exposed, and an unmapped value fails the build. The earlier version unioned nine hardcoded table names, which meant a brand-new table contributed nothing and its drift could not be detected — the check failed *open* for exactly the case where drift is most likely. That is how `hla_associations` reached BigQuery with a `datasets` table holding zero `finngen_hla` rows while this loader reported success.
 
 Views leave that scope only through `live_dataset_scope.EXCLUDED_VIEWS`, which stores a reason per entry: `gene_annotations_v` and `variant_annotation_v` are reference tables with no `dataset` column, and `phenotypes_v` / `datasets_v` are built *from* the map under test, so including them would make the check confirm itself. A view that is neither excluded nor has a dataset-bearing column **fails loudly** — being skipped for a missing column is the same fail-open trap one level down. (`peak_to_gene_v` is deliberately *not* excluded: contrary to an earlier note here it does carry a `dataset` column, a constant `FinnGen_ATACseq`, and including it costs nothing.)
 

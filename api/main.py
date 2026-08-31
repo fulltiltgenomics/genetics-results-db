@@ -526,14 +526,6 @@ def _run_internal_query(sql: str, caps: _Caps) -> "bigquery.QueryJob":
         _charge_aggregate_spent(caps.jti, job.total_bytes_processed or 0)
     return job
 
-# expose views (not underlying tables) so AI agents use the enriched schemas
-VIEWS = ["credible_sets_v", "colocalization_v", "coloc_credsets_v", "exome_variant_results_v", "gene_burden_results_v", "asm_qtl_v", "gene_annotations_v", "open_chromatin_v", "variant_effect_v", "mpra_v", "variant_annotation_v", "peak_to_gene_v", "hla_associations_v", "phenotypes_v", "datasets_v"]
-# base table -> view. The aliasing applies only to the /schema and /tables/{name}/sample name
-# lookups; on /query a bare `credible_sets` is resolved by BigQuery to the base table itself,
-# not to `credible_sets_v`. These names are also allow-listed for /query, as they always were.
-_BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
-
-
 # load all metadata from shared datasets.yaml (single source of truth)
 try:
     from api.yaml_loader import load_all as _load_yaml_config
@@ -555,6 +547,22 @@ _TABLE_EXAMPLES: dict[str, list[dict[str, str]]] = _yaml_config["table_examples"
 _CATEGORICAL_COLUMNS: dict[str, dict[str, str | None]] = _yaml_config["categorical_columns"]
 logger.info("Loaded dataset config from YAML (%d resources, %d tables)",
             len(_RESOURCE_METADATA), len(_TABLE_DESCRIPTIONS))
+
+# expose views (not underlying tables) so AI agents use the enriched schemas. Derived from the
+# config's `exposed` flags rather than listed here, so the allow-list has one definition and
+# cannot drift from the registry that documents the same tables. The derivation only narrows:
+# an entry without the flag is documented and unreachable.
+VIEWS = _yaml_config["views"]
+if not VIEWS:
+    raise RuntimeError(
+        "no exposed views in datasets.yaml — every endpoint would 403/404 while /health "
+        "still reports healthy. Check the config is fully synced and that the tables meant "
+        "to be reachable carry `exposed: true`"
+    )
+# base table -> view. The aliasing applies only to the /schema and /tables/{name}/sample name
+# lookups; on /query a bare `credible_sets` is resolved by BigQuery to the base table itself,
+# not to `credible_sets_v`. These names are also allow-listed for /query, as they always were.
+_BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
 
 _VALUES_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _VALUES_CACHE_TTL_SECONDS = 3600
