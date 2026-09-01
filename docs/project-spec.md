@@ -1036,7 +1036,7 @@ These four loaders default `GCS_BUCKET` to the placeholder `bucket-name`, so set
 - a live `dataset` value with no registry entry,
 - a registry claim that no results table contains,
 - a `phenotypes` row keyed on a `dataset` no results table contains,
-- a name in `ABSENT_FROM_RESULTS` that has since become live.
+- a name suppressed by `ABSENT_FROM_RESULTS` for this profile that has since become live in it.
 
 The **scope** of that cross-check is derived, not listed. `scripts/live_dataset_scope.py` reads the exposed view names from `configs/datasets.yaml` through the same `api/yaml_loader.load_views` `api/main.py` derives `VIEWS` from, so one definition of "exposed" serves both. They read separate *copies* of that registry, though — the API reads the ConfigMap `deploy.sh` builds from the suite repo's canonical file at deploy time, this script reads the checkout's `sync-datasets.sh`-generated copy at run time — so the two agree only while the sync and the deploy are both current. It reads `INFORMATION_SCHEMA.COLUMNS` for the `dataset` / `dataset1` / `dataset2` columns, and generates the `UNION ALL` the loader runs. Anything the API exposes is therefore in scope automatically: a newly added view puts its `dataset` values in front of the check the moment it is exposed, and an unmapped value fails the build. The earlier version unioned nine hardcoded table names, which meant a brand-new table contributed nothing and its drift could not be detected — the check failed *open* for exactly the case where drift is most likely. That is how `hla_associations` reached BigQuery with a `datasets` table holding zero `finngen_hla` rows while this loader reported success.
 
@@ -1046,7 +1046,9 @@ If the cross-check query itself returns nothing (bad auth, quota, a renamed view
 
 `hla_associations` names its trait column **`phenotype`** — a third spelling alongside `trait` and `trait_original`. Its 2,712 codes are the FinnGen R14 endpoint codes, but `finngen_hla` still gets its own `phenotypes` rows rather than borrowing `FinnGen_R14`'s: the table is keyed on `(dataset, trait_original)` so that every results-view `dataset` resolves its own names with one uniform join, and `FinnGen_R12` already duplicates 2,315 of R14's codes for the same reason. The join is `p.dataset = 'finngen_hla' AND p.trait_original = h.phenotype`.
 
-`build_phenotypes.ABSENT_FROM_RESULTS` records the names deliberately mapped but absent from BigQuery — today `IIBDGC` (registered, credible sets not loaded) and six eQTL Catalogue sub-studies (`QTD000736`, `QTD000863`, `QTD000865`, `QTD000869`, `QTD000910`, `QTD000915`) that are in the collection metadata but not in the imported release. They are emitted with `dataset = NULL` and contribute no `phenotypes` rows, so nothing points at an empty result.
+`build_phenotypes.ABSENT_FROM_RESULTS` records the names deliberately mapped but absent from BigQuery — eQTL Catalogue sub-studies that are in the collection metadata but not in the imported release, and datasets registered before their fine-mapping was loaded. They are emitted with `dataset = NULL` and contribute no `phenotypes` rows, so nothing points at an empty result. Read the entries out of the code rather than from a list here.
+
+Absence is **per-deployment state**, not a property of the dataset, so each entry carries the profiles it applies to (`ALL_PROFILES` for every profile) and `--profile` resolves the list before the build. Listing a name globally suppresses its rows in a deployment that *has* the data, with no error anywhere — `ibd_gwas` lost its IBD/UC/CD phenotype rows that way in a deployment whose `credible_sets_v` holds `IIBDGC`. The scope is an allow-list of profiles rather than an exclusion, so a profile added later inherits nobody's absence and fails `validate()` loudly if the data really is missing there.
 
 ### API deployment
 

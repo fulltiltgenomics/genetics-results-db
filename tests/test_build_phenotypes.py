@@ -12,12 +12,17 @@ from build_phenotypes import (  # noqa: E402
     ABSENT_FROM_RESULTS,
     BQ_DATASETS_BY_DATASET_ID,
     COLOC_PARTNER_ONLY_DATASET_IDS,
+    absent_from_results,
     build_datasets,
     build_phenotypes,
     parse_date,
     safe_int,
     validate,
 )
+
+# every builder takes the profile's resolved suppression list; the fixtures below name none
+# of the suppressed datasets, so which profile is resolved here does not change their results
+ABSENT = absent_from_results("finngen")
 
 
 RESOURCES = {
@@ -101,7 +106,11 @@ METADATA = {
 
 
 def _phenotypes():
-    return build_phenotypes(REGISTRY, METADATA)
+    return build_phenotypes(REGISTRY, METADATA, ABSENT)
+
+
+def _datasets():
+    return build_datasets(REGISTRY, RESOURCES, METADATA, ABSENT)
 
 
 def test_key_column_is_the_phenocode_not_the_display_name():
@@ -147,7 +156,7 @@ def test_eqtl_catalogue_produces_no_phenotype_rows():
 
 
 def test_datasets_unique_on_dataset_and_merges_shared_entries():
-    rows = build_datasets(REGISTRY, RESOURCES, METADATA)
+    rows = _datasets()
     named = [r["dataset"] for r in rows if r["dataset"]]
     assert len(named) == len(set(named))
     pgc = next(r for r in rows if r["dataset"] == "PGC")
@@ -156,13 +165,13 @@ def test_datasets_unique_on_dataset_and_merges_shared_entries():
 
 
 def test_registry_entries_without_bigquery_presence_get_a_null_dataset():
-    rows = build_datasets(REGISTRY, RESOURCES, METADATA)
+    rows = _datasets()
     gtex = next(r for r in rows if r["dataset_id"] == "gtex_expression")
     assert gtex["dataset"] is None
 
 
 def test_collection_subdatasets_become_their_own_rows():
-    rows = build_datasets(REGISTRY, RESOURCES, METADATA)
+    rows = _datasets()
     qtd = {r["dataset"]: r for r in rows if (r["dataset"] or "").startswith("QTD")}
     assert set(qtd) == {"QTD000001", "QTD000002"}
     assert qtd["QTD000001"]["subdataset_of"] == "eqtl_catalogue"
@@ -176,16 +185,16 @@ def test_collection_subdatasets_become_their_own_rows():
 
 
 def test_resource_metadata_is_attached():
-    rows = build_datasets(REGISTRY, RESOURCES, METADATA)
+    rows = _datasets()
     r14 = next(r for r in rows if r["dataset"] == "FinnGen_R14")
     assert r14["resource_label"] == "FinnGen"
     assert r14["resource_aliases"] == ["FinnGen"]
 
 
 def test_validate_reports_both_directions():
-    rows = build_datasets(REGISTRY, RESOURCES, METADATA)
+    rows = _datasets()
     phenotype_rows, _ = _phenotypes()
-    problems = validate(rows, phenotype_rows, {"FinnGen_R14", "SomethingNew"})
+    problems = validate(rows, phenotype_rows, {"FinnGen_R14", "SomethingNew"}, ABSENT)
     assert any("SomethingNew" in p for p in problems)
     assert any("FinnGen_kanta" in p for p in problems)
 
@@ -193,24 +202,43 @@ def test_validate_reports_both_directions():
 def test_validate_reports_a_registry_claim_that_resolves_to_nothing():
     """The direction that used to be missing: mapped - live. Registry entries claiming a
     dataset no results table holds send agents to an empty result."""
-    rows = build_datasets(REGISTRY, RESOURCES, METADATA)
+    rows = _datasets()
     phenotype_rows, _ = _phenotypes()
-    problems = validate(rows, phenotype_rows, {"FinnGen_R14"})
+    problems = validate(rows, phenotype_rows, {"FinnGen_R14"}, ABSENT)
     assert any("FinnGen_kanta" in p and "no results table contains it" in p for p in problems)
 
 
 def test_validate_flags_a_stale_absent_from_results_entry():
     """A suppressed name that came back to life must un-suppress, not stay hidden."""
-    name = next(iter(ABSENT_FROM_RESULTS))
-    problems = validate([], [], {name})
+    name = next(iter(ABSENT))
+    problems = validate([], [], {name}, ABSENT)
     assert any(name in p and "IS live now" in p for p in problems)
 
 
+def test_absence_is_scoped_per_profile_not_global():
+    """Absence is per-deployment state, so a scoped entry must apply to the profiles it
+    names and to nothing else. A global list silently drops rows in a deployment that HAS
+    the data - the failure mode this dimension exists to remove."""
+    for name, (profiles, _) in ABSENT_FROM_RESULTS.items():
+        if profiles is None:
+            continue
+        for profile in profiles:
+            assert name in absent_from_results(profile)
+        assert name not in absent_from_results("a-profile-that-does-not-exist")
+
+
+def test_iibdgc_is_suppressed_only_where_its_credible_sets_are_absent():
+    """daly's credible_sets_v holds IIBDGC rows, so suppressing them there hides the three
+    ibd_gwas phenotypes (IBD/UC/CD) the join is supposed to resolve."""
+    assert "IIBDGC" in absent_from_results("finngen")
+    assert "IIBDGC" not in absent_from_results("daly")
+
+
 def test_absent_datasets_are_emitted_with_a_null_dataset_and_no_phenotypes():
-    rows = build_datasets(REGISTRY, RESOURCES, METADATA)
-    assert all(r["dataset"] not in ABSENT_FROM_RESULTS for r in rows)
+    rows = _datasets()
+    assert all(r["dataset"] not in ABSENT for r in rows)
     phenotype_rows, _ = _phenotypes()
-    assert all(r["dataset"] not in ABSENT_FROM_RESULTS for r in phenotype_rows)
+    assert all(r["dataset"] not in ABSENT for r in phenotype_rows)
 
 
 def test_every_coloc_partner_only_dataset_is_mapped():

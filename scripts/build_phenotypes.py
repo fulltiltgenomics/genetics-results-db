@@ -124,19 +124,45 @@ BQ_DATASETS_BY_DATASET_ID = {
 # BigQuery presence" state, and contribute no `phenotypes` rows.
 # validate() fails if a name listed here IS live, so the list cannot rot silently - delete a
 # name here as soon as its data lands.
+#
+# Absence is per-DEPLOYMENT state ("not loaded over there"), not a property of the dataset,
+# so each entry carries the profiles it applies to. `ALL_PROFILES` means every profile.
+# Suppression is the quiet direction - a name listed for a deployment that HAS the data
+# drops its rows with no error anywhere - so the scope is an allow-list of profiles rather
+# than an exclusion: a profile added later inherits nobody's absence and instead fails
+# validate() loudly if the data really is missing there.
+ALL_PROFILES = None
+
 ABSENT_FROM_RESULTS = {
-    # registered and resource-derivation rules exist, but the fine-mapping has never been
-    # loaded into this project; it also produced 3 orphan phenotypes rows (IBD/CD/UC)
-    "IIBDGC": "ibd_gwas registered but its credible sets are not loaded",
+    # registered and resource-derivation rules exist, but the fine-mapping is not loaded in
+    # every deployment; where it is listed it also produced 3 orphan phenotypes rows
+    # (IBD/CD/UC).
+    # daly is verified live: credible_sets_v holds IIBDGC rows for CD/IBD/UC.
+    # finngen is UNVERIFIED - phewas-development denies bigquery.tables.list to the account
+    # this was last edited from - and is left listed rather than guessed at, because
+    # unlisting it there when the data is genuinely missing fails the build, while listing
+    # it when the data is present hides rows in silence.
+    "IIBDGC": (("finngen",), "ibd_gwas registered but its credible sets are not loaded"),
     # eQTL Catalogue sub-studies present in the collection metadata whose fine-mapping is not
-    # part of the imported release; the other ~840 QTD ids are live
-    "QTD000736": "eQTL Catalogue sub-study not in the imported release",
-    "QTD000863": "eQTL Catalogue sub-study not in the imported release",
-    "QTD000865": "eQTL Catalogue sub-study not in the imported release",
-    "QTD000869": "eQTL Catalogue sub-study not in the imported release",
-    "QTD000910": "eQTL Catalogue sub-study not in the imported release",
-    "QTD000915": "eQTL Catalogue sub-study not in the imported release",
+    # part of the imported release; the other ~840 QTD ids are live. Not profile-scoped:
+    # validate() errors when a listed name IS live, and it does not for these.
+    "QTD000736": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
+    "QTD000863": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
+    "QTD000865": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
+    "QTD000869": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
+    "QTD000910": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
+    "QTD000915": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
 }
+
+
+def absent_from_results(profile):
+    """The suppression list that applies to `profile`, as {dataset name: reason}."""
+    return {
+        name: reason
+        for name, (profiles, reason) in ABSENT_FROM_RESULTS.items()
+        if profiles is ALL_PROFILES or profile in profiles
+    }
+
 
 # registry entries retained only as colocalization partners: they ship no independently
 # queryable product, and results-api's search index leaves them out
@@ -322,8 +348,10 @@ _PHENOTYPE_HARMONIZERS = {
 }
 
 
-def build_phenotypes(registry, metadata_by_dataset_id):
+def build_phenotypes(registry, metadata_by_dataset_id, absent):
     """Assemble phenotype rows, unique on (dataset, trait_original).
+
+    `absent` is this profile's absent_from_results() mapping.
 
     Collisions are resolved in favour of the currently released dataset over a
     coloc-partner-only one, so the (dataset, trait_original) join stays 1:1.
@@ -340,7 +368,7 @@ def build_phenotypes(registry, metadata_by_dataset_id):
         partner_only = dataset_id in COLOC_PARTNER_ONLY_DATASET_IDS
         harmonized = harmonizer(items, entry)
         for dataset in BQ_DATASETS_BY_DATASET_ID.get(dataset_id, []):
-            if dataset in ABSENT_FROM_RESULTS:
+            if dataset in absent:
                 continue  # a phenotype row keyed on a dataset no results view has joins nothing
             for row in harmonized:
                 if not row["trait"]:
@@ -374,8 +402,10 @@ def build_phenotypes(registry, metadata_by_dataset_id):
     return list(by_key.values()), dropped
 
 
-def build_datasets(registry, resources, metadata_by_dataset_id):
+def build_datasets(registry, resources, metadata_by_dataset_id, absent):
     """Assemble dataset rows: every registry entry, plus eQTL Catalogue QTD sub-studies.
+
+    `absent` is this profile's absent_from_results() mapping.
 
     Rows are unique on `dataset` so `JOIN datasets_v USING (dataset)` never fans results
     out. Where several registry entries share one results-view dataset (pgc_scz + pgc_bip,
@@ -436,7 +466,7 @@ def build_datasets(registry, resources, metadata_by_dataset_id):
         }
         names = [
             name for name in BQ_DATASETS_BY_DATASET_ID.get(dataset_id, [])
-            if name not in ABSENT_FROM_RESULTS
+            if name not in absent
         ] or [None]
         for name in names:
             _emit({**base, "dataset": name, "dataset_ids": list(base["dataset_ids"])})
@@ -452,7 +482,7 @@ def build_datasets(registry, resources, metadata_by_dataset_id):
             label_parts = [item.get(k) for k in ("sample_group", "tissue_label", "condition_label")]
             _emit({
                 **base,
-                "dataset": None if sub_id in ABSENT_FROM_RESULTS else sub_id,
+                "dataset": None if sub_id in absent else sub_id,
                 "dataset_id": sub_id,
                 "dataset_ids": [sub_id],
                 "description": " - ".join(p for p in label_parts if p) or None,
@@ -467,7 +497,7 @@ def build_datasets(registry, resources, metadata_by_dataset_id):
     return rows
 
 
-def validate(dataset_rows, phenotype_rows, live_datasets):
+def validate(dataset_rows, phenotype_rows, live_datasets, absent):
     """Cross-check the registry <-> results-view `dataset` mapping in every direction.
 
     All four checks are fatal to the build (see main): a mapping that exists in no config
@@ -483,11 +513,11 @@ def validate(dataset_rows, phenotype_rows, live_datasets):
     for name in sorted(mapped - live_datasets):
         problems.append(
             f"registry maps dataset={name!r} but no results table contains it - fix the "
-            f"mapping, or add it to ABSENT_FROM_RESULTS with a reason")
-    for name in sorted(set(ABSENT_FROM_RESULTS) & live_datasets):
+            f"mapping, or add it to ABSENT_FROM_RESULTS scoped to this profile, with a reason")
+    for name in sorted(set(absent) & live_datasets):
         problems.append(
-            f"dataset={name!r} is in ABSENT_FROM_RESULTS but IS live now - remove it there so "
-            f"its rows stop being suppressed")
+            f"dataset={name!r} is in ABSENT_FROM_RESULTS for this profile but IS live now - "
+            f"drop the profile from its entry (or the entry) so its rows stop being suppressed")
     with_phenotypes = {r["dataset"] for r in phenotype_rows}
     for name in sorted(with_phenotypes - live_datasets):
         problems.append(f"phenotypes built for dataset={name!r} which no results view contains")
@@ -527,8 +557,9 @@ def main():
             cache[uri] = read_metadata_file(uri)
         metadata_by_dataset_id[dataset_id] = cache[uri]
 
-    phenotype_rows, dropped = build_phenotypes(registry, metadata_by_dataset_id)
-    dataset_rows = build_datasets(registry, resources, metadata_by_dataset_id)
+    absent = absent_from_results(args.profile)
+    phenotype_rows, dropped = build_phenotypes(registry, metadata_by_dataset_id, absent)
+    dataset_rows = build_datasets(registry, resources, metadata_by_dataset_id, absent)
 
     if dropped:
         counts = defaultdict(int)
@@ -539,7 +570,7 @@ def main():
 
     live = {name.strip() for name in (args.validate_against or "").split(",") if name.strip()}
     if live:
-        problems = validate(dataset_rows, phenotype_rows, live)
+        problems = validate(dataset_rows, phenotype_rows, live, absent)
         for problem in problems:
             print(f"ERROR: {problem}", file=sys.stderr)
         if problems and not args.allow_unvalidated:
