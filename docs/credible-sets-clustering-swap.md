@@ -86,6 +86,8 @@ It was worse than merely useless. Measured on the pre-swap view, `WHERE resource
 Three candidate clusterings were built as experiment tables and benchmarked with real
 execution against the 10 commonest logged query shapes. The chosen one, `data_type,
 resource, variant, pos`, took the weighted total from **333.14 GB to 43.45 GB (−87.0%)**.
+That aggregate is unreproducible and is contradicted by an independent re-measurement; see
+§6.4 before relying on it.
 
 Accepted, already-approved costs:
 
@@ -596,6 +598,41 @@ projection or the absolute numbers will not line up.
 The acceptance criterion for the whole change is the aggregate from the benchmark: the
 weighted total over the 10 commonest logged shapes goes from **333.14 GB to 43.45 GB**.
 
+**That figure has never been reproduced, and the independent re-measurement disagrees with
+it.** Its inputs — which ten shapes, and their weights — were not recorded anywhere, so it
+cannot be recomputed. `scripts/bench_credible_sets_layout.py` rebuilds the measurement from
+the two inputs that do survive: BigQuery job history, and both layouts sitting side by side
+in `genetics_results_dev`. Re-run it rather than trusting either number here:
+
+```bash
+./.venv/bin/python scripts/bench_credible_sets_layout.py shapes   # population, no scan cost
+./.venv/bin/python scripts/bench_credible_sets_layout.py run      # the A/B
+./.venv/bin/python scripts/bench_credible_sets_layout.py verify   # this table, re-measured
+```
+
+Over the 1,320 production-service-account queries logged since 2026-04-09, weighting the
+top 10 shapes by observed frequency, that harness measures **409.37 GB → 312.88 GB
+(−23.6%)**, not −87.0%.
+
+The gap is in *shape selection*, not in measurement: `verify` reproduces every pre-swap
+figure in the table above to the exact byte. What the −87.0% figure needs is a population
+dominated by `WHERE variant = <literal>`, the one shape that gains 96%. In the logged
+traffic that predicate appears in **2.5% of jobs and 1.9% of bytes**, and its commonest
+shape ranks 39th of 1,145 — it cannot be in any traffic-derived top 10. Meanwhile
+`most_severe`, an *approved regression*, carries 16.5% of logged bytes.
+
+Two further facts that bear on the criterion, both from the same harness:
+
+- The traffic barely has repeated shapes at all: 1,320 queries collapse to 1,145 shapes,
+  97% of them singletons. **Any** top-10 weighting covers only 11% of jobs and 8% of bytes,
+  so it is a narrow measure of this workload however the ten are chosen.
+- The new layout is larger on disk (26.96 GB vs 23.75 GB) because `variant` and `resource`
+  are materialised, so unfiltered scans and column-aggregate queries pay more. Shape 2 in
+  the traffic-derived set regresses +52.9% for exactly this reason.
+
+Whether −23.6% still justifies the rewrite and the two approved regressions is a decision,
+not a measurement, and it is not settled here.
+
 Expect these to regress, as approved: `WHERE dataset = ...` (+267%),
 `WHERE gene_most_severe = ...` (+44%), `WHERE most_severe = ...` (+8%).
 
@@ -721,4 +758,9 @@ moment this swap lands, and must be corrected in that repo in the same change wi
 2. The accompanying example SQL, which carries a now-pointless `WHERE chr = 12 AND
    variant = ...`.
 
-See the report accompanying this runbook for the exact wording to change.
+No such accompanying report exists. Re-derive both numbers instead with
+`scripts/bench_credible_sets_layout.py verify`, whose first two rows are exactly this
+comparison. Latest run: on the pre-swap layout the `chr` filter is worth **20.7×**
+(7,606,541,126 B → 367,715,852 B), and on the new layout adding it *costs* **+13.6%**
+(270,624,992 B → 307,509,464 B) — so both claims above hold, and the example SQL should
+lose its `chr` predicate.
