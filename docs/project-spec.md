@@ -641,6 +641,11 @@ Every query is authorized before it runs (see Security → Query authorization).
 }
 ```
 
+Cell values are JSON scalars; a STRUCT column comes back as a nested object and an ARRAY as
+an array (`_serialize_value` recurses), so `ARRAY_AGG(STRUCT(...))[OFFSET(0)]` reaches the
+sandbox SDK as a polars struct rather than its Python-repr string. Anything else non-scalar
+(Decimal, date, bytes) is its string form.
+
 `max_rows_applied` is the row ceiling this request actually ran under — `min(max_rows, the
 per-credential cap)`, so 25 000 is the most a sandbox execution can see and 100 000 the most a
 caller verified against `INTERNAL_API_SECRET` can. It exists because `truncated` says the rows
