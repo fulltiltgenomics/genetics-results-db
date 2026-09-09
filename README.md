@@ -40,6 +40,8 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/load_gene_annotations.sh](scripts/load_gene_annotations.sh) builds and loads the HGNC/GENCODE gene reference table (truncates `gene_annotations`)
 
+[scripts/load_dosage_sensitivity.sh](scripts/load_dosage_sensitivity.sh) loads the Collins et al. 2022 gene dosage-sensitivity scores (truncates `dosage_sensitivity`)
+
 ## Server setup
 
 Requires [uv](https://docs.astral.sh/uv/):
@@ -86,8 +88,9 @@ data. Set it explicitly:
 PROJECT_ID=phewas-development DATASET_ID=genetics_dev PORT=8080 python api/main.py
 ```
 
-`phewas-development:genetics_dev` (`europe-west1`) holds the full 15-table / 15-view
-schema with a small subset of the data (~3.6M rows / ~612 MB): chromosome 22 only for the
+`phewas-development:genetics_dev` (`europe-west1`) holds every table and view in
+`schemas/` (except `dosage_sensitivity`, not yet seeded here) with a small subset of the
+data (~3.6M rows / ~612 MB): chromosome 22 only for the
 results tables (capped at 500k rows for `gene_burden_results` and `open_chromatin`),
 `coloc_credsets` and `credible_sets` seeded from the credible-set IDs the loaded
 `colocalization` rows reference so both directions of that pivot resolve, and complete
@@ -170,6 +173,7 @@ Queries go through a view (`<table>_v`) per table, which adds derived columns su
 - **variant_annotation** — FinnGen R14 per-variant functional annotations and allele frequencies
 - **peak_to_gene** — Open4Gene peak-to-gene links, joining peak-keyed caQTL results to genes
 - **hla_associations** — classical HLA allele associations (FinnGen R14; keyed by allele, not by variant)
+- **dosage_sensitivity** — gene-level pHaplo/pTriplo dosage-sensitivity scores (Collins et al. 2022 rare-CNV map)
 - **phenotypes** — trait metadata behind the results tables' phenotype codes, keyed by `(dataset, trait_original)`
 - **datasets** — dataset registry: what each results-view `dataset` value is, its resource, version and credible-set caveats
 
