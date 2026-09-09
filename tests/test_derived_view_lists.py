@@ -39,6 +39,7 @@ LINTED_VIEWS = {
     "open_chromatin_v",
     "peak_to_gene_v",
     "rcnv_gene_associations_v",
+    "rcnv_segments_v",
     "variant_effect_v",
 }
 

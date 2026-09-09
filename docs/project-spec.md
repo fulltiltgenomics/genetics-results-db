@@ -58,6 +58,8 @@ BigQuery Dataset
   │   └── dosage_sensitivity_v (view: adds constant resource='rcnv')
   ├── rcnv_gene_associations (unpartitioned, clustered by phenotype, cnv_type, ensembl_gene_id)
   │   └── rcnv_gene_associations_v (view: adds resource column mapped to 'rcnv', LEFT JOINs dosage_sensitivity)
+  ├── rcnv_segments (unpartitioned, clustered by chr, segment_start)
+  │   └── rcnv_segments_v (view: adds resource column mapped to 'rcnv', SPLITs the six ';'-joined lists into ARRAY<STRING>)
   ├── phenotypes (unpartitioned metadata table, clustered by dataset, trait_original)
   │   └── phenotypes_v (view: pass-through — resource is already a registry column)
   └── datasets (unpartitioned metadata table, clustered by dataset, resource)
@@ -442,6 +444,18 @@ Column list: `schemas/rcnv_gene_associations.sql` (23 columns; the loader's `SCH
 
 `rcnv_gene_associations_v` derives `resource` from the `Collins_rCNV%` rule the way the other product views do, and LEFT JOINs `dosage_sensitivity` on `ensembl_gene_id` so `phaplo`/`ptriplo`/`haploinsufficient`/`triplosensitive` ride on every association row. It is the one view whose base table must be loaded *before* `scripts/load_phenotypes.sh` runs: `build_phenotypes.BQ_DATASETS_BY_DATASET_ID['collins_rcnv_2022']` names `Collins_rCNV_2022`, and the registry cross-check fails for the whole profile while no results view carries that value.
 
+### rcnv_segments
+
+The region-level product of the same Collins et al. 2022 release (Table S3): the 163 disease-associated rare-CNV segments, one row each — 69 DEL and 94 DUP, 88 genome-wide significant and 75 FDR significant. Where `rcnv_gene_associations` is gene-keyed, this is interval-keyed, and it is the view that answers "what is known about this locus".
+
+**Coordinates are dual, and the GRCh38 pair is incomplete.** `segment_start_grch37`/`segment_end_grch37` are the published intervals and are always present; `segment_start`/`segment_end` are the GRCh38 lift and are NULL for the 10 segments that do not lift as whole intervals — the recurrent genomic disorders over segmental-duplication-flanked regions, both 22q11.21 segments among them. A `BETWEEN segment_start AND segment_end` predicate silently drops exactly the best-known loci, so queries state `segment_start IS NOT NULL` and fall back to the GRCh37 pair when the region matters more than the build. The source TSV's bare `start`/`end` are loaded under these names rather than `end` staying a reserved GoogleSQL keyword that a caller must remember to backtick — this table is queried by model-written SQL, and the rename removes the hazard instead of documenting it.
+
+**Six list columns are stored joined and split in the view.** `associated_hpos`, `credints`, `credints_grch37`, `genes`, `genes_gencode_v19` and `gene_ensembl_ids` load as the source's `';'`-joined strings and `rcnv_segments_v` exposes them as `ARRAY<STRING>`. The split is not done at load time because `DERIVED_COLUMNS` in `scripts/load_data.py` materialises columns the TSV does *not* carry — it drops them from the staging schema — while these six are columns of the file; converting them in place would mean new staging machinery on the `CHR_STRING_TABLES` model for a 163-row table. Two need more than a bare `SPLIT`: `credints` is NULL where every one of a segment's intervals failed to lift (the whole field was the `NA` null marker), and the view restores the literal so it stays positionally aligned with `credints_grch37`; the gene lists are empty for the 12 gene-poor segments, and `SPLIT('')` returns a one-element array of the empty string, which would make `ARRAY_LENGTH` disagree with `n_genes`.
+
+Unpartitioned, clustered by `chr, segment_start`. The repo partitions results tables by `RANGE_BUCKET(chr, ...)`, but 163 rows over 22 chromosomes is ~7 rows a partition — the metadata costs more than the pruning saves, the same reasoning that left `dosage_sensitivity` unpartitioned.
+
+Column list: `schemas/rcnv_segments.sql` (the loader's `SCHEMAS["rcnv_segments"]` in `scripts/load_data.py` must match the staged TSV's column order, and the null marker is `NA`).
+
 ### peak_to_gene
 
 Open4Gene peak-to-gene links from the FinnGen ATAC-seq study: which genes a chromatin peak's accessibility is associated with, in which cell type. One row per (peak, gene, cell type), ~1.07M rows over 112,032 peaks and 12,445 genes across 33 cell types. Only significant links are published, so a missing row means no significant link was found, not evidence against one.
@@ -821,7 +835,7 @@ SQL and typed tools do not work against `genetics_dev` without changing the MCP 
 |---|---|
 | Dev dataset | `phewas-development:genetics_dev`, location `europe-west1` |
 | How to select it | `DATASET_ID=genetics_dev` in the environment that starts `api/main.py` |
-| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except `dosage_sensitivity` and `rcnv_gene_associations`, not yet seeded here |
+| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except `dosage_sensitivity`, `rcnv_gene_associations` and `rcnv_segments`, not yet seeded here |
 | Data | ~3.6M rows / ~612 MB, against production's ~1.1B rows / ~224 GB |
 
 The location must be the **region** `europe-west1`, matching the production datasets, not
@@ -900,6 +914,8 @@ genetics-results-db/
 │   ├── dosage_sensitivity_v.sql       # View with constant resource='rcnv'
 │   ├── rcnv_gene_associations.sql     # Collins et al. 2022 per-phenotype DEL/DUP gene association statistics
 │   ├── rcnv_gene_associations_v.sql   # View with resource column ('rcnv') + LEFT JOIN of the dosage-sensitivity scores
+│   ├── rcnv_segments.sql              # Collins et al. 2022 disease-associated rare-CNV segments (Table S3)
+│   ├── rcnv_segments_v.sql            # View with resource column ('rcnv') + the six list columns SPLIT into ARRAY<STRING>
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
 │   ├── variant_annotation_v.sql       # View with constant resource='finngen'
 │   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
@@ -925,6 +941,7 @@ genetics-results-db/
 │   ├── load_hla.sh            # Load FinnGen HLA allele associations (single combined file; chr-string→INT64, dataset injected via --const-column)
 │   ├── load_dosage_sensitivity.sh # Load Collins et al. 2022 dosage-sensitivity scores (WRITE_TRUNCATE) + create dosage_sensitivity_v view
 │   ├── load_rcnv_gene_associations.sh # Load Collins et al. 2022 rCNV gene associations (WRITE_TRUNCATE) + create rcnv_gene_associations_v view; run before load_phenotypes.sh
+│   ├── load_rcnv_segments.sh      # Load Collins et al. 2022 rCNV segments (WRITE_TRUNCATE) + create rcnv_segments_v view
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources

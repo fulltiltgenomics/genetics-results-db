@@ -443,6 +443,43 @@ SCHEMAS = {
         bigquery.SchemaField("mlog10p_secondary", "FLOAT64"),
         bigquery.SchemaField("mlog10_fdr_q_secondary", "FLOAT64"),
     ],
+    # column order must match TSV file exactly (as staged by
+    # genetics-results-munge/scripts/munge_rcnv.sh --product segments). the source TSV's
+    # bare `start`/`end` are loaded as `segment_start`/`segment_end` (a table queried by
+    # model-written SQL should not need a reserved keyword backticked). NA is the null
+    # marker: segment_start/segment_end are NA for the 10 segments whose GRCh38 lift failed,
+    # and `credints` is NA where every credible interval of a segment failed to lift. The six
+    # ';'-joined list columns load as written and are SPLIT into ARRAY<STRING> by
+    # rcnv_segments_v — DERIVED_COLUMNS only materialises columns the TSV does not carry.
+    "rcnv_segments": [
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("segment_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cnv_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("segment_start", "INT64"),
+        bigquery.SchemaField("segment_end", "INT64"),
+        bigquery.SchemaField("segment_start_grch37", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("segment_end_grch37", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("cytoband", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("best_significance", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("control_freq", "FLOAT64"),
+        bigquery.SchemaField("case_freq", "FLOAT64"),
+        bigquery.SchemaField("beta", "FLOAT64"),
+        bigquery.SchemaField("beta_lower", "FLOAT64"),
+        bigquery.SchemaField("beta_upper", "FLOAT64"),
+        bigquery.SchemaField("beta_min", "FLOAT64"),
+        bigquery.SchemaField("beta_max", "FLOAT64"),
+        bigquery.SchemaField("n_hpos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("associated_hpos", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("n_credints", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("credints", "STRING"),
+        bigquery.SchemaField("credints_grch37", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("credint_size", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_genes", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("genes", "STRING"),
+        bigquery.SchemaField("genes_gencode_v19", "STRING"),
+        bigquery.SchemaField("gene_ensembl_ids", "STRING"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for

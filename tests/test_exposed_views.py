@@ -36,6 +36,7 @@ EXPOSED_VIEWS = {
     "peak_to_gene_v",
     "phenotypes_v",
     "rcnv_gene_associations_v",
+    "rcnv_segments_v",
     "variant_annotation_v",
     "variant_effect_v",
 }
