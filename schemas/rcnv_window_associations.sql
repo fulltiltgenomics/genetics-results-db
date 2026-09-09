@@ -13,10 +13,11 @@
 --   same-chromosome, lifted length within 180-220 kb); window_start_grch37/
 --   window_end_grch37 are the published originals and are the only stable identity a
 --   window has. The published windows are a regular 200 kb / 10 kb-step grid in GRCh37;
---   the LIFTED set is NOT — 378 adjacent pairs reorder, lifted lengths run 190,000-219,265
---   and only 90.5% are exactly 200 kb. So neither the width nor the step may be assumed of
---   the GRCh38 columns, and (chr, window_start_grch37, window_end_grch37) — not the GRCh38
---   pair — is what counts distinct windows.
+--   the LIFTED set is NOT — adjacent pairs can reorder and lifted lengths run 190,000-219,265
+--   (see genetics-results-munge's docs/rcnv-sliding-windows.md for the width distribution).
+--   So neither the width nor the step may be assumed of the GRCh38 columns, and
+--   (chr, window_start_grch37, window_end_grch37) — not the GRCh38 pair — is what counts
+--   distinct windows.
 --
 -- 4,880 of the 267,237 published windows (1.83%) do not lift and are absent. The loss is
 --   not uniform: chr9 7.7%, chr21 4.4%, chr22 3.6%, chr1 3.2% (pericentromeric and

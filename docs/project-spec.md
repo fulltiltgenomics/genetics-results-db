@@ -460,9 +460,9 @@ Column list: `schemas/rcnv_segments.sql` (the loader's `SCHEMAS["rcnv_segments"]
 
 ### rcnv_window_associations
 
-The position-keyed product of the same Collins et al. 2022 release: the genome-wide sliding-window DEL/DUP meta-analysis, one row per (phenotype, cnv_type, window). 11,198,315 rows over 259,795 windows — the largest table of the rCNV product by two orders of magnitude. A row is the association of the CNVs *overlapping* an interval; nothing attributes it to a gene, so there is no gene column and no join to `dosage_sensitivity`.
+The position-keyed product of the same Collins et al. 2022 release: the genome-wide sliding-window DEL/DUP meta-analysis, one row per (phenotype, cnv_type, window). 11,198,315 rows over 259,795 windows — the largest table of the rCNV product. A row is the association of the CNVs *overlapping* an interval; nothing attributes it to a gene, so there is no gene column and no join to `dosage_sensitivity`.
 
-**Coordinates are dual, and only the GRCh37 pair is a grid.** The published windows are 200 kb wide with a 10 kb step in GRCh37, and `window_start_grch37`/`window_end_grch37` are those values. `window_start`/`window_end` are the GRCh38 lift (UCSC liftOver, whole interval, same chromosome, 180-220 kb) and are what callers query, since every other view in the suite is GRCh38 — but the lifted set is not a grid: widths run 190,000-219,265, only ~90% are exactly 200 kb, and 378 adjacent pairs reorder. Distinct windows are therefore counted on `(chr, window_start_grch37, window_end_grch37)`.
+**Coordinates are dual, and only the GRCh37 pair is a grid.** The published windows are 200 kb wide with a 10 kb step in GRCh37, and `window_start_grch37`/`window_end_grch37` are those values. `window_start`/`window_end` are the GRCh38 lift (UCSC liftOver, whole interval, same chromosome, 180-220 kb) and are what callers query, since every other view in the suite is GRCh38 — but the lifted set is not a grid: widths run 190,000-219,265 and adjacent pairs can reorder — see `genetics-results-munge`'s `docs/rcnv-sliding-windows.md` for the width distribution. Distinct windows are therefore counted on `(chr, window_start_grch37, window_end_grch37)`.
 
 **Rows are dropped, not nulled.** 4,880 of the 267,237 published windows (1.83%) fail to lift and are absent, clustered on chr9 (7.7%), chr21 (4.4%), chr22 (3.6%) and chr1 (3.2%); a further 2,562 lift but carry NA statistics in every phenotype x CNV group. This is the opposite of `rcnv_gene_associations`, which keeps its 65% of NULL-stat rows so "tested, no estimate" stays visible: a window with no estimate is not a fact about an entity anyone can ask about, so the munge drops it. Every loaded row carries a `beta`, and rows per (phenotype, cnv_type) group range from 17,114 to 257,726.
 
@@ -849,7 +849,7 @@ SQL and typed tools do not work against `genetics_dev` without changing the MCP 
 |---|---|
 | Dev dataset | `phewas-development:genetics_dev`, location `europe-west1` |
 | How to select it | `DATASET_ID=genetics_dev` in the environment that starts `api/main.py` |
-| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except `dosage_sensitivity`, `rcnv_gene_associations`, `rcnv_segments` and `rcnv_window_associations`, not yet seeded here |
+| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except the rCNV tables (`dosage_sensitivity` and `rcnv_*`), not seeded here — `bq ls phewas-development:genetics_dev` is the live list |
 | Data | ~3.6M rows / ~612 MB, against production's ~1.1B rows / ~224 GB |
 
 The location must be the **region** `europe-west1`, matching the production datasets, not

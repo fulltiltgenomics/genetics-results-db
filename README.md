@@ -89,7 +89,8 @@ PROJECT_ID=phewas-development DATASET_ID=genetics_dev PORT=8080 python api/main.
 ```
 
 `phewas-development:genetics_dev` (`europe-west1`) holds every table and view in
-`schemas/` (except `dosage_sensitivity`, `rcnv_gene_associations`, `rcnv_segments` and `rcnv_window_associations`, not yet seeded here) with a small subset of the
+`schemas/` (except the rCNV tables — `dosage_sensitivity` and `rcnv_*` — which are not seeded
+there; `bq ls phewas-development:genetics_dev` is the live list) with a small subset of the
 data (~3.6M rows / ~612 MB): chromosome 22 only for the
 results tables (capped at 500k rows for `gene_burden_results` and `open_chromatin`),
 `coloc_credsets` and `credible_sets` seeded from the credible-set IDs the loaded
