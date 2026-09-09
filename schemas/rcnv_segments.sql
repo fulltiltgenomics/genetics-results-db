@@ -5,10 +5,12 @@
 --
 -- Coordinates are dual. `segment_start_grch37`/`segment_end_grch37` are the published
 --   intervals and are always present; `segment_start`/`segment_end` are the GRCh38 lift and
---   are NULL for the 10 segments whose interval does not lift as a whole (the recurrent
---   genomic disorders over segmental-duplication-flanked regions — both 22q11.21 segments,
---   15q11.2-q13.3, 1q21.1-q21.2, 17p13.3, 13q34 and four others). A coordinate query against
---   `segment_start`/`segment_end` therefore cannot see them, which is why the GRCh37 pair is
+--   are NULL where the munge could lift neither the whole interval nor the two published
+--   200 kb sliding windows that begin and end on the segment's boundaries (six segments on
+--   the chain the current load was built from, among them the 22q11.21 duplication; the set
+--   is a property of the liftOver chain, and genetics-results-munge's
+--   docs/rcnv-dosage-sensitivity.md carries the current one). A coordinate query against
+--   `segment_start`/`segment_end` cannot see those rows, which is why the GRCh37 pair is
 --   kept rather than dropped as provenance.
 --
 -- The columns are `segment_start`/`segment_end`, not the bare `start`/`end` the source TSV
@@ -41,8 +43,8 @@ CREATE TABLE IF NOT EXISTS `genetics_results.rcnv_segments`
   segment_id STRING NOT NULL OPTIONS(description="Segment identifier as published, e.g. merged_DEL_segment_22q11.21. Unique within the table"),
   cnv_type STRING NOT NULL OPTIONS(description="Copy-number variant class: DEL (deletion) or DUP (duplication)"),
   chr INT64 NOT NULL OPTIONS(description="Chromosome number, 1-22. The published segments are autosomal only"),
-  segment_start INT64 OPTIONS(description="Segment start, GRCh38, 0-based half-open as published. NULL for the 10 segments whose interval does not lift from GRCh37 as a whole"),
-  segment_end INT64 OPTIONS(description="Segment end, GRCh38. NULL for the same 10 segments as segment_start"),
+  segment_start INT64 OPTIONS(description="Segment start, GRCh38, 0-based half-open as published. NULL for the few segments whose GRCh37 interval lifts neither whole nor via the sliding windows on its boundaries"),
+  segment_end INT64 OPTIONS(description="Segment end, GRCh38. NULL for the same segments as segment_start"),
   segment_start_grch37 INT64 NOT NULL OPTIONS(description="Segment start as published (GRCh37). Always present; the fallback for the segments that do not lift"),
   segment_end_grch37 INT64 NOT NULL OPTIONS(description="Segment end as published (GRCh37). Always present"),
   cytoband STRING NOT NULL OPTIONS(description="Cytogenetic band range the segment spans, e.g. 22q11.21"),
