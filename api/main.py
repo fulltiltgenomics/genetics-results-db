@@ -1106,11 +1106,22 @@ async def execute_query(request: QueryRequest, http_request: Request):
 
 
 def _serialize_value(value: Any) -> Any:
-    """Serialize BigQuery values to JSON-compatible types."""
+    """Serialize BigQuery values to JSON-compatible types.
+
+    STRUCT and ARRAY columns arrive from the client as dicts and lists and must stay that
+    shape: a struct rendered with `str()` reaches the sandbox SDK as a Python-repr string,
+    so `ARRAY_AGG(STRUCT(...))[OFFSET(0)] AS lead` gives polars a Utf8 column and
+    `.struct.field()` fails on it. Everything else non-scalar (Decimal, date, bytes) keeps
+    the string form.
+    """
     if value is None:
         return None
     if isinstance(value, (int, float, str, bool)):
         return value
+    if isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialize_value(v) for v in value]
     return str(value)
 
 
