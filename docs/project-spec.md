@@ -56,6 +56,8 @@ BigQuery Dataset
   │   └── hla_associations_v (view: adds resource column, mapped to 'finngen')
   ├── dosage_sensitivity (unpartitioned reference table, clustered by symbol)
   │   └── dosage_sensitivity_v (view: adds constant resource='rcnv')
+  ├── rcnv_gene_associations (unpartitioned, clustered by phenotype, cnv_type, ensembl_gene_id)
+  │   └── rcnv_gene_associations_v (view: adds resource column mapped to 'rcnv', LEFT JOINs dosage_sensitivity)
   ├── phenotypes (unpartitioned metadata table, clustered by dataset, trait_original)
   │   └── phenotypes_v (view: pass-through — resource is already a registry column)
   └── datasets (unpartitioned metadata table, clustered by dataset, resource)
@@ -423,6 +425,22 @@ Gene-level dosage-sensitivity scores from Collins et al. 2022, *A cross-disorder
 | triplosensitive | BOOL | Yes | `ptriplo >= 0.94` |
 
 `dosage_sensitivity_v` appends a constant `'rcnv' AS resource` on the `gene_annotations_v` pattern: the table is a single published product with no `dataset` column for a CASE to switch on.
+
+### rcnv_gene_associations
+
+The per-phenotype half of the same Collins et al. 2022 release: one row per (phenotype, cnv_type, gene) over 54 HPO phenotype groups x {DEL, DUP} x 17,263 autosomal protein-coding genes (1,864,404 rows). Where `dosage_sensitivity` says whether a gene is dosage sensitive at all, this says which phenotype a deletion or duplication of it is associated with.
+
+**No coordinates, by construction** — same reason as `dosage_sensitivity`, but the stakes are higher here because the source BEDs *do* carry GRCh37 intervals: storing them would make a silently wrong join against any GRCh38 view possible. Coordinates come from `gene_annotations_v` on `ensembl_gene_id`.
+
+**65% of rows carry NULL from `beta` onward.** Every gene appears for every (phenotype, cnv_type) pair, including the 1,214,820 rows where the gene was tested but the meta-analysis produced no estimate. Keeping them is what makes "tested, no estimate" distinguishable from "not tested", matching `gene_burden_results_v`'s unfiltered contract; a caller wanting estimated associations filters `beta IS NOT NULL`. `n_nominal_cohorts` is not a proxy for that — the NULL rows are not the `n_nominal_cohorts = 0` rows.
+
+**Significance has two tiers, each gated by secondary evidence.** A gene is exome-wide significant if `mlog10p > -LOG10(2.90e-6)` (P <= 2.90e-6), or FDR significant if `mlog10_fdr_q > -LOG10(0.01)` (FDR < 1%); either tier additionally requires `n_nominal_cohorts >= 2` OR `mlog10p_secondary > -LOG10(0.05)`. Checked against dev: the full rule returns 5,680 rows over 739 distinct genes, matching the paper's published totals. `beta` is ln(OR). The `*_secondary` columns are a leave-`top_cohort`-out sensitivity re-analysis, NULL for 86% of rows.
+
+Unpartitioned — there is no chromosome column to `RANGE_BUCKET` on — and clustered by `phenotype, cnv_type, ensembl_gene_id`. Clustering is a sort prefix, so a phenotype-scoped scan prunes and a gene-only PheWAS across all 54 groups does not; `symbol` is deliberately not a fourth clustering column, being functionally determined by the third.
+
+Column list: `schemas/rcnv_gene_associations.sql` (23 columns; the loader's `SCHEMAS["rcnv_gene_associations"]` in `scripts/load_data.py` must match the staged TSV's column order, and the null marker is `NA`).
+
+`rcnv_gene_associations_v` derives `resource` from the `Collins_rCNV%` rule the way the other product views do, and LEFT JOINs `dosage_sensitivity` on `ensembl_gene_id` so `phaplo`/`ptriplo`/`haploinsufficient`/`triplosensitive` ride on every association row. It is the one view whose base table must be loaded *before* `scripts/load_phenotypes.sh` runs: `build_phenotypes.BQ_DATASETS_BY_DATASET_ID['collins_rcnv_2022']` names `Collins_rCNV_2022`, and the registry cross-check fails for the whole profile while no results view carries that value.
 
 ### peak_to_gene
 
@@ -803,7 +821,7 @@ SQL and typed tools do not work against `genetics_dev` without changing the MCP 
 |---|---|
 | Dev dataset | `phewas-development:genetics_dev`, location `europe-west1` |
 | How to select it | `DATASET_ID=genetics_dev` in the environment that starts `api/main.py` |
-| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except `dosage_sensitivity`, not yet seeded here |
+| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except `dosage_sensitivity` and `rcnv_gene_associations`, not yet seeded here |
 | Data | ~3.6M rows / ~612 MB, against production's ~1.1B rows / ~224 GB |
 
 The location must be the **region** `europe-west1`, matching the production datasets, not
@@ -880,6 +898,8 @@ genetics-results-db/
 │   ├── hla_associations_v.sql         # View with resource column (mapped to 'finngen')
 │   ├── dosage_sensitivity.sql         # Collins et al. 2022 gene dosage-sensitivity scores (pHaplo/pTriplo)
 │   ├── dosage_sensitivity_v.sql       # View with constant resource='rcnv'
+│   ├── rcnv_gene_associations.sql     # Collins et al. 2022 per-phenotype DEL/DUP gene association statistics
+│   ├── rcnv_gene_associations_v.sql   # View with resource column ('rcnv') + LEFT JOIN of the dosage-sensitivity scores
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
 │   ├── variant_annotation_v.sql       # View with constant resource='finngen'
 │   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
@@ -904,6 +924,7 @@ genetics-results-db/
 │   ├── load_mpra.sh           # Load Siraj MPRA results (single LONG file; chr-string→INT64, dataset injected via --const-column)
 │   ├── load_hla.sh            # Load FinnGen HLA allele associations (single combined file; chr-string→INT64, dataset injected via --const-column)
 │   ├── load_dosage_sensitivity.sh # Load Collins et al. 2022 dosage-sensitivity scores (WRITE_TRUNCATE) + create dosage_sensitivity_v view
+│   ├── load_rcnv_gene_associations.sh # Load Collins et al. 2022 rCNV gene associations (WRITE_TRUNCATE) + create rcnv_gene_associations_v view; run before load_phenotypes.sh
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources

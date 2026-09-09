@@ -412,6 +412,37 @@ SCHEMAS = {
         bigquery.SchemaField("haploinsufficient", "BOOL", mode="REQUIRED"),
         bigquery.SchemaField("triplosensitive", "BOOL", mode="REQUIRED"),
     ],
+    # column order must match TSV file exactly (as staged by
+    # genetics-results-munge/scripts/munge_rcnv.sh --product genes). NA is the null
+    # marker: `cohorts_excluded` is NA where no cohort was dropped, and everything from
+    # `beta` on is NA for the 65% of rows where the gene was tested but the meta-analysis
+    # produced no estimate — those rows load with NULL stats on purpose, so "tested, no
+    # estimate" stays distinguishable from "not tested".
+    "rcnv_gene_associations": [
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("phenotype", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cnv_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("symbol_gencode_v19", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("ensembl_gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("n_nominal_cohorts", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("top_cohort", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cohorts_excluded", "STRING"),
+        bigquery.SchemaField("case_freq", "FLOAT64"),
+        bigquery.SchemaField("control_freq", "FLOAT64"),
+        bigquery.SchemaField("beta", "FLOAT64"),
+        bigquery.SchemaField("beta_lower", "FLOAT64"),
+        bigquery.SchemaField("beta_upper", "FLOAT64"),
+        bigquery.SchemaField("z", "FLOAT64"),
+        bigquery.SchemaField("mlog10p", "FLOAT64"),
+        bigquery.SchemaField("mlog10_fdr_q", "FLOAT64"),
+        bigquery.SchemaField("beta_secondary", "FLOAT64"),
+        bigquery.SchemaField("beta_lower_secondary", "FLOAT64"),
+        bigquery.SchemaField("beta_upper_secondary", "FLOAT64"),
+        bigquery.SchemaField("z_secondary", "FLOAT64"),
+        bigquery.SchemaField("mlog10p_secondary", "FLOAT64"),
+        bigquery.SchemaField("mlog10_fdr_q_secondary", "FLOAT64"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
