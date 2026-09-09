@@ -54,6 +54,8 @@ BigQuery Dataset
   │   └── peak_to_gene_v (view: adds resource column)
   ├── hla_associations (unpartitioned, clustered by phenotype, gene, allele)
   │   └── hla_associations_v (view: adds resource column, mapped to 'finngen')
+  ├── dosage_sensitivity (unpartitioned reference table, clustered by symbol)
+  │   └── dosage_sensitivity_v (view: adds constant resource='rcnv')
   ├── phenotypes (unpartitioned metadata table, clustered by dataset, trait_original)
   │   └── phenotypes_v (view: pass-through — resource is already a registry column)
   └── datasets (unpartitioned metadata table, clustered by dataset, resource)
@@ -399,6 +401,28 @@ It also **renames the statistic columns** to the suite's house spelling, which i
 The values are unchanged — the rename exists because results-api serves the same quantities from the per-phenotype tabix files under `mlog10p`/`se`/`af`/`af_cases`/`af_controls`, and the SDK's `hla()` returns results from both stores (`genetics-results-suite-5wm`). The table keeps FinnGen's native spelling so the loader stays a straight copy of the staged file. Because of the rename the view lists its columns explicitly instead of `SELECT *`: a new column on `hla_associations` must be named in the view too, or it will not surface. `tests/test_hla_view_columns.py` is what catches the omission — it parses the select list of `schemas/hla_associations_v.sql` offline and asserts its source identifiers (the left side of `mlogp AS mlog10p`) cover every field of `SCHEMAS["hla_associations"]` in `scripts/load_data.py`.
 
 Replacing this view is not covered by the suite's `deploy.sh` — it is applied by `scripts/setup_bigquery.sh` — and it is not compatible with the previously deployed mcp-server. See "HLA column rename rollout" in `../genetics-results-suite/docs/project-spec.md` for the ordering.
+
+### dosage_sensitivity
+
+Gene-level dosage-sensitivity scores from Collins et al. 2022, *A cross-disorder dosage sensitivity map of the human genome* (Cell 185:3041, doi 10.1016/j.cell.2022.06.036, Zenodo record 6347673, CC-BY 4.0). One row per autosomal protein-coding gene: `phaplo` is the probability that losing one copy is deleterious, `ptriplo` the probability that gaining one is, both estimated from rare CNVs in ~1M individuals.
+
+**No coordinates, by construction.** The scores are gene-keyed, so nothing here depends on the GRCh37 the source was called on and no liftover is involved. Join `gene_annotations_v` on `ensembl_gene_id` when coordinates are wanted.
+
+**The key is `ensembl_gene_id`, not `symbol`.** GENCODE gives a handful of gene pairs the same name, so a symbol join can legitimately return two rows; `symbol_gencode_v19` keeps the source's own spelling for genes whose symbol has since been renamed (and for the residue the mapping could not resolve, where the two columns are equal).
+
+`haploinsufficient` and `triplosensitive` materialise the paper's published cutoffs (`phaplo >= 0.86`, `ptriplo >= 0.94`) so a caller need not remember them and cannot silently substitute another; the raw scores remain available for anyone who wants a different threshold. The table is small and unpartitioned, clustered by `symbol`.
+
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| symbol | STRING | Yes | Current HGNC gene symbol, mapped from the source GENCODE v19 symbol via ENSG |
+| symbol_gencode_v19 | STRING | Yes | Gene symbol as published (GENCODE v19 spelling) |
+| ensembl_gene_id | STRING | Yes | Ensembl gene ID (unversioned); unique — the table's key |
+| phaplo | FLOAT64 | Yes | pHaplo: probability the gene is haploinsufficient (0-1) |
+| ptriplo | FLOAT64 | Yes | pTriplo: probability the gene is triplosensitive (0-1) |
+| haploinsufficient | BOOL | Yes | `phaplo >= 0.86` |
+| triplosensitive | BOOL | Yes | `ptriplo >= 0.94` |
+
+`dosage_sensitivity_v` appends a constant `'rcnv' AS resource` on the `gene_annotations_v` pattern: the table is a single published product with no `dataset` column for a CASE to switch on.
 
 ### peak_to_gene
 
@@ -779,7 +803,7 @@ SQL and typed tools do not work against `genetics_dev` without changing the MCP 
 |---|---|
 | Dev dataset | `phewas-development:genetics_dev`, location `europe-west1` |
 | How to select it | `DATASET_ID=genetics_dev` in the environment that starts `api/main.py` |
-| Schema | complete — all 15 tables and all 15 views, created by `scripts/setup_bigquery.sh` from `schemas/` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly |
+| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except `dosage_sensitivity`, not yet seeded here |
 | Data | ~3.6M rows / ~612 MB, against production's ~1.1B rows / ~224 GB |
 
 The location must be the **region** `europe-west1`, matching the production datasets, not
@@ -854,6 +878,8 @@ genetics-results-db/
 │   ├── mpra_v.sql                     # View with resource column
 │   ├── hla_associations.sql           # Classical HLA allele associations (FinnGen R14; allele-keyed, no ref/alt)
 │   ├── hla_associations_v.sql         # View with resource column (mapped to 'finngen')
+│   ├── dosage_sensitivity.sql         # Collins et al. 2022 gene dosage-sensitivity scores (pHaplo/pTriplo)
+│   ├── dosage_sensitivity_v.sql       # View with constant resource='rcnv'
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
 │   ├── variant_annotation_v.sql       # View with constant resource='finngen'
 │   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
@@ -877,6 +903,7 @@ genetics-results-db/
 │   ├── load_variant_effect.sh # Load predicted variant effects (marderstein chrombpnet+flare; chr-string→INT64 conversion, truncate+append)
 │   ├── load_mpra.sh           # Load Siraj MPRA results (single LONG file; chr-string→INT64, dataset injected via --const-column)
 │   ├── load_hla.sh            # Load FinnGen HLA allele associations (single combined file; chr-string→INT64, dataset injected via --const-column)
+│   ├── load_dosage_sensitivity.sh # Load Collins et al. 2022 dosage-sensitivity scores (WRITE_TRUNCATE) + create dosage_sensitivity_v view
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources

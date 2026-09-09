@@ -394,6 +394,24 @@ SCHEMAS = {
         bigquery.SchemaField("collection", "BOOL", mode="REQUIRED"),
         bigquery.SchemaField("subdataset_of", "STRING"),
     ],
+    # column order must match TSV file exactly (as staged by
+    # genetics-results-munge/scripts/munge_rcnv.sh --product scores: symbol,
+    # symbol_gencode_v19, ensembl_gene_id, phaplo, ptriplo, haploinsufficient,
+    # triplosensitive). All REQUIRED — the staged file carries no NA, so a NULL is a
+    # broken munge and must fail the load. The two BOOL columns are the lowercase
+    # true/false the CSV loader parses natively; no staging conversion is needed.
+    # the direct CSV path is positional, and the two adjacent same-typed pairs below
+    # (symbol/symbol_gencode_v19, haploinsufficient/triplosensitive) mean a munge-side
+    # column reorder would load silently wrong instead of failing on type.
+    "dosage_sensitivity": [
+        bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("symbol_gencode_v19", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("ensembl_gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("phaplo", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("ptriplo", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("haploinsufficient", "BOOL", mode="REQUIRED"),
+        bigquery.SchemaField("triplosensitive", "BOOL", mode="REQUIRED"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for

@@ -45,6 +45,7 @@ MATERIALIZED_VIEWS = {"credible_sets_v"}
 
 CROSS_CHECK_EXCLUDED = {
     "datasets_v",
+    "dosage_sensitivity_v",
     "gene_annotations_v",
     "phenotypes_v",
     "variant_annotation_v",
