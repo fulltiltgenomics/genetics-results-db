@@ -624,7 +624,7 @@ Example:
 }
 ```
 
-Values are computed by querying `SELECT DISTINCT` on each view and cached in-process for one hour. New datasets show up automatically after the cache expires.
+Values are computed by querying `SELECT DISTINCT` on each view and cached in-process for one hour. New datasets show up automatically after the cache expires. Whatever the column's BigQuery type, the values (and the parent keys of `allowed_values_by_<col>`) are always rendered as strings in BigQuery's own spelling — a BOOL column enumerates as `["false", "true"]` — so a consumer reads every list the same way, though the column's own type still says whether a value belongs quoted in SQL.
 
 ### Logging
 

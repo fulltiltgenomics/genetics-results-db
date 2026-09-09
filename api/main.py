@@ -581,6 +581,19 @@ _DERIVED_COLUMN_MODES = {
 }
 
 
+def _render_categorical_value(value: Any) -> str:
+    """Render one distinct categorical value as the string a caller would paste into SQL.
+
+    ARRAY_AGG over a BOOL or numeric column yields Python objects, and downstream code assumes
+    a string — `_compact_categorical_values`' collection-resource prefix test calls `.lower()`
+    on rendered values it inspects. BigQuery spells booleans `true`/`false`, so that is what a
+    BOOL renders as.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return value if isinstance(value, str) else str(value)
+
+
 def _get_categorical_values(view_name: str, caps: _Caps) -> dict[str, Any]:
     """Return distinct values for a view's categorical columns.
 
@@ -613,7 +626,9 @@ def _get_categorical_values(view_name: str, caps: _Caps) -> dict[str, Any]:
         try:
             row = next(iter(_run_internal_query(sql, caps).result()))
             for c in flat_cols:
-                result[c] = sorted(row[c] or [])
+                # sorted() runs before _render_categorical_value, so a numeric categorical
+                # column would sort numerically inside what becomes a list of strings — none exists today.
+                result[c] = [_render_categorical_value(v) for v in sorted(row[c] or [])]
         except HTTPException:
             raise  # an exhausted aggregate budget is the caller's answer, not a warning
         except Exception as e:
@@ -628,9 +643,11 @@ def _get_categorical_values(view_name: str, caps: _Caps) -> dict[str, Any]:
         sql = f"SELECT {dep}, {agg} FROM {fq} WHERE {dep} IS NOT NULL GROUP BY {dep}"
         try:
             for row in _run_internal_query(sql, caps).result():
-                key = row[dep]
+                key = _render_categorical_value(row[dep])
                 for c in cols:
-                    result.setdefault(f"{c}_by_{dep}", {})[key] = sorted(row[c] or [])
+                    result.setdefault(f"{c}_by_{dep}", {})[key] = [
+                        _render_categorical_value(v) for v in sorted(row[c] or [])
+                    ]
         except HTTPException:
             raise
         except Exception as e:
