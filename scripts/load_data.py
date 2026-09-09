@@ -480,6 +480,39 @@ SCHEMAS = {
         bigquery.SchemaField("genes_gencode_v19", "STRING"),
         bigquery.SchemaField("gene_ensembl_ids", "STRING"),
     ],
+    # column order must match TSV file exactly (as staged by
+    # genetics-results-munge/scripts/munge_rcnv.sh --product windows). the source `chr` is
+    # already a bare integer (autosomes only), so no CHR_STRING_TABLES staging is needed.
+    # NA is the null marker, but unlike the gene product it only ever appears in
+    # `cohorts_excluded` and the *_secondary columns: rows whose primary statistics are NA
+    # are dropped at munge, so every loaded row carries a beta.
+    "rcnv_window_associations": [
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("phenotype", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cnv_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("window_start", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("window_end", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("window_start_grch37", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("window_end_grch37", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_nominal_cohorts", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("top_cohort", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cohorts_excluded", "STRING"),
+        bigquery.SchemaField("case_freq", "FLOAT64"),
+        bigquery.SchemaField("control_freq", "FLOAT64"),
+        bigquery.SchemaField("beta", "FLOAT64"),
+        bigquery.SchemaField("beta_lower", "FLOAT64"),
+        bigquery.SchemaField("beta_upper", "FLOAT64"),
+        bigquery.SchemaField("z", "FLOAT64"),
+        bigquery.SchemaField("mlog10p", "FLOAT64"),
+        bigquery.SchemaField("mlog10_fdr_q", "FLOAT64"),
+        bigquery.SchemaField("beta_secondary", "FLOAT64"),
+        bigquery.SchemaField("beta_lower_secondary", "FLOAT64"),
+        bigquery.SchemaField("beta_upper_secondary", "FLOAT64"),
+        bigquery.SchemaField("z_secondary", "FLOAT64"),
+        bigquery.SchemaField("mlog10p_secondary", "FLOAT64"),
+        bigquery.SchemaField("mlog10_fdr_q_secondary", "FLOAT64"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for

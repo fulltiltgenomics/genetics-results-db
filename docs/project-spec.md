@@ -60,6 +60,8 @@ BigQuery Dataset
   │   └── rcnv_gene_associations_v (view: adds resource column mapped to 'rcnv', LEFT JOINs dosage_sensitivity)
   ├── rcnv_segments (unpartitioned, clustered by chr, segment_start)
   │   └── rcnv_segments_v (view: adds resource column mapped to 'rcnv', SPLITs the six ';'-joined lists into ARRAY<STRING>)
+  ├── rcnv_window_associations (partitioned by chr, clustered by phenotype, cnv_type, window_start)
+  │   └── rcnv_window_associations_v (view: adds resource column mapped to 'rcnv'; no join — a window has no gene)
   ├── phenotypes (unpartitioned metadata table, clustered by dataset, trait_original)
   │   └── phenotypes_v (view: pass-through — resource is already a registry column)
   └── datasets (unpartitioned metadata table, clustered by dataset, resource)
@@ -456,6 +458,18 @@ Unpartitioned, clustered by `chr, segment_start`. The repo partitions results ta
 
 Column list: `schemas/rcnv_segments.sql` (the loader's `SCHEMAS["rcnv_segments"]` in `scripts/load_data.py` must match the staged TSV's column order, and the null marker is `NA`).
 
+### rcnv_window_associations
+
+The position-keyed product of the same Collins et al. 2022 release: the genome-wide sliding-window DEL/DUP meta-analysis, one row per (phenotype, cnv_type, window). 11,198,315 rows over 259,795 windows — the largest table of the rCNV product by two orders of magnitude. A row is the association of the CNVs *overlapping* an interval; nothing attributes it to a gene, so there is no gene column and no join to `dosage_sensitivity`.
+
+**Coordinates are dual, and only the GRCh37 pair is a grid.** The published windows are 200 kb wide with a 10 kb step in GRCh37, and `window_start_grch37`/`window_end_grch37` are those values. `window_start`/`window_end` are the GRCh38 lift (UCSC liftOver, whole interval, same chromosome, 180-220 kb) and are what callers query, since every other view in the suite is GRCh38 — but the lifted set is not a grid: widths run 190,000-219,265, only ~90% are exactly 200 kb, and 378 adjacent pairs reorder. Distinct windows are therefore counted on `(chr, window_start_grch37, window_end_grch37)`.
+
+**Rows are dropped, not nulled.** 4,880 of the 267,237 published windows (1.83%) fail to lift and are absent, clustered on chr9 (7.7%), chr21 (4.4%), chr22 (3.6%) and chr1 (3.2%); a further 2,562 lift but carry NA statistics in every phenotype x CNV group. This is the opposite of `rcnv_gene_associations`, which keeps its 65% of NULL-stat rows so "tested, no estimate" stays visible: a window with no estimate is not a fact about an entity anyone can ask about, so the munge drops it. Every loaded row carries a `beta`, and rows per (phenotype, cnv_type) group range from 17,114 to 257,726.
+
+Partitioned by `RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))` exactly as `credible_sets` is — unlike the two small rCNV tables, this one has the row count to pay for it — and clustered by `phenotype, cnv_type, window_start`, so a phenotype-and-region question prunes and a coordinate range stays contiguous inside a phenotype.
+
+Column list: `schemas/rcnv_window_associations.sql` (the loader's `SCHEMAS["rcnv_window_associations"]` in `scripts/load_data.py` must match the staged TSV's column order; the null marker is `NA` and reaches only `cohorts_excluded` and the `*_secondary` columns). The source `chr` is already a bare integer, so this takes the direct-load path rather than `CHR_STRING_TABLES` staging.
+
 ### peak_to_gene
 
 Open4Gene peak-to-gene links from the FinnGen ATAC-seq study: which genes a chromatin peak's accessibility is associated with, in which cell type. One row per (peak, gene, cell type), ~1.07M rows over 112,032 peaks and 12,445 genes across 33 cell types. Only significant links are published, so a missing row means no significant link was found, not evidence against one.
@@ -835,7 +849,7 @@ SQL and typed tools do not work against `genetics_dev` without changing the MCP 
 |---|---|
 | Dev dataset | `phewas-development:genetics_dev`, location `europe-west1` |
 | How to select it | `DATASET_ID=genetics_dev` in the environment that starts `api/main.py` |
-| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except `dosage_sensitivity`, `rcnv_gene_associations` and `rcnv_segments`, not yet seeded here |
+| Schema | every table and view in `schemas/`, created by `scripts/setup_bigquery.sh` with `PROJECT_ID`/`DATASET_ID`/`LOCATION` set explicitly — except `dosage_sensitivity`, `rcnv_gene_associations`, `rcnv_segments` and `rcnv_window_associations`, not yet seeded here |
 | Data | ~3.6M rows / ~612 MB, against production's ~1.1B rows / ~224 GB |
 
 The location must be the **region** `europe-west1`, matching the production datasets, not
@@ -916,6 +930,8 @@ genetics-results-db/
 │   ├── rcnv_gene_associations_v.sql   # View with resource column ('rcnv') + LEFT JOIN of the dosage-sensitivity scores
 │   ├── rcnv_segments.sql              # Collins et al. 2022 disease-associated rare-CNV segments (Table S3)
 │   ├── rcnv_segments_v.sql            # View with resource column ('rcnv') + the six list columns SPLIT into ARRAY<STRING>
+│   ├── rcnv_window_associations.sql   # Collins et al. 2022 sliding-window DEL/DUP association statistics (GRCh38, GRCh37 pair kept)
+│   ├── rcnv_window_associations_v.sql # View with resource column ('rcnv'); no join — a window has no gene
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
 │   ├── variant_annotation_v.sql       # View with constant resource='finngen'
 │   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
@@ -942,6 +958,7 @@ genetics-results-db/
 │   ├── load_dosage_sensitivity.sh # Load Collins et al. 2022 dosage-sensitivity scores (WRITE_TRUNCATE) + create dosage_sensitivity_v view
 │   ├── load_rcnv_gene_associations.sh # Load Collins et al. 2022 rCNV gene associations (WRITE_TRUNCATE) + create rcnv_gene_associations_v view; run before load_phenotypes.sh
 │   ├── load_rcnv_segments.sh      # Load Collins et al. 2022 rCNV segments (WRITE_TRUNCATE) + create rcnv_segments_v view
+│   ├── load_rcnv_window_associations.sh # Load Collins et al. 2022 rCNV sliding-window associations (WRITE_TRUNCATE) + create rcnv_window_associations_v view
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
