@@ -394,6 +394,125 @@ SCHEMAS = {
         bigquery.SchemaField("collection", "BOOL", mode="REQUIRED"),
         bigquery.SchemaField("subdataset_of", "STRING"),
     ],
+    # column order must match TSV file exactly (as staged by
+    # genetics-results-munge/scripts/munge_rcnv.sh --product scores: symbol,
+    # symbol_gencode_v19, ensembl_gene_id, phaplo, ptriplo, haploinsufficient,
+    # triplosensitive). All REQUIRED — the staged file carries no NA, so a NULL is a
+    # broken munge and must fail the load. The two BOOL columns are the lowercase
+    # true/false the CSV loader parses natively; no staging conversion is needed.
+    # the direct CSV path is positional, and the two adjacent same-typed pairs below
+    # (symbol/symbol_gencode_v19, haploinsufficient/triplosensitive) mean a munge-side
+    # column reorder would load silently wrong instead of failing on type.
+    "dosage_sensitivity": [
+        bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("symbol_gencode_v19", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("ensembl_gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("phaplo", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("ptriplo", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("haploinsufficient", "BOOL", mode="REQUIRED"),
+        bigquery.SchemaField("triplosensitive", "BOOL", mode="REQUIRED"),
+    ],
+    # column order must match TSV file exactly (as staged by
+    # genetics-results-munge/scripts/munge_rcnv.sh --product genes). NA is the null
+    # marker: `cohorts_excluded` is NA where no cohort was dropped, and everything from
+    # `beta` on is NA for the 65% of rows where the gene was tested but the meta-analysis
+    # produced no estimate — those rows load with NULL stats on purpose, so "tested, no
+    # estimate" stays distinguishable from "not tested".
+    "rcnv_gene_associations": [
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("phenotype", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cnv_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("symbol_gencode_v19", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("ensembl_gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("n_nominal_cohorts", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("top_cohort", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cohorts_excluded", "STRING"),
+        bigquery.SchemaField("case_freq", "FLOAT64"),
+        bigquery.SchemaField("control_freq", "FLOAT64"),
+        bigquery.SchemaField("beta", "FLOAT64"),
+        bigquery.SchemaField("beta_lower", "FLOAT64"),
+        bigquery.SchemaField("beta_upper", "FLOAT64"),
+        bigquery.SchemaField("z", "FLOAT64"),
+        bigquery.SchemaField("mlog10p", "FLOAT64"),
+        bigquery.SchemaField("mlog10_fdr_q", "FLOAT64"),
+        bigquery.SchemaField("beta_secondary", "FLOAT64"),
+        bigquery.SchemaField("beta_lower_secondary", "FLOAT64"),
+        bigquery.SchemaField("beta_upper_secondary", "FLOAT64"),
+        bigquery.SchemaField("z_secondary", "FLOAT64"),
+        bigquery.SchemaField("mlog10p_secondary", "FLOAT64"),
+        bigquery.SchemaField("mlog10_fdr_q_secondary", "FLOAT64"),
+    ],
+    # column order must match TSV file exactly (as staged by
+    # genetics-results-munge/scripts/munge_rcnv.sh --product segments). the source TSV's
+    # bare `start`/`end` are loaded as `segment_start`/`segment_end` (a table queried by
+    # model-written SQL should not need a reserved keyword backticked). NA is the null
+    # marker: segment_start/segment_end are NA for the segments with no GRCh38 lift at all,
+    # and `credints` is NA where every credible interval of a segment failed to lift. The six
+    # ';'-joined list columns load as written and are SPLIT into ARRAY<STRING> by
+    # rcnv_segments_v — DERIVED_COLUMNS only materialises columns the TSV does not carry.
+    "rcnv_segments": [
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("segment_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cnv_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("segment_start", "INT64"),
+        bigquery.SchemaField("segment_end", "INT64"),
+        bigquery.SchemaField("segment_start_grch37", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("segment_end_grch37", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("cytoband", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("best_significance", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("control_freq", "FLOAT64"),
+        bigquery.SchemaField("case_freq", "FLOAT64"),
+        bigquery.SchemaField("beta", "FLOAT64"),
+        bigquery.SchemaField("beta_lower", "FLOAT64"),
+        bigquery.SchemaField("beta_upper", "FLOAT64"),
+        bigquery.SchemaField("beta_min", "FLOAT64"),
+        bigquery.SchemaField("beta_max", "FLOAT64"),
+        bigquery.SchemaField("n_hpos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("associated_hpos", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("n_credints", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("credints", "STRING"),
+        bigquery.SchemaField("credints_grch37", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("credint_size", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_genes", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("genes", "STRING"),
+        bigquery.SchemaField("genes_gencode_v19", "STRING"),
+        bigquery.SchemaField("gene_ensembl_ids", "STRING"),
+    ],
+    # column order must match TSV file exactly (as staged by
+    # genetics-results-munge/scripts/munge_rcnv.sh --product windows). the source `chr` is
+    # already a bare integer (autosomes only), so no CHR_STRING_TABLES staging is needed.
+    # NA is the null marker, but unlike the gene product it only ever appears in
+    # `cohorts_excluded` and the *_secondary columns: rows whose primary statistics are NA
+    # are dropped at munge, so every loaded row carries a beta.
+    "rcnv_window_associations": [
+        bigquery.SchemaField("dataset", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("phenotype", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cnv_type", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("window_start", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("window_end", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("window_start_grch37", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("window_end_grch37", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_nominal_cohorts", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("top_cohort", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cohorts_excluded", "STRING"),
+        bigquery.SchemaField("case_freq", "FLOAT64"),
+        bigquery.SchemaField("control_freq", "FLOAT64"),
+        bigquery.SchemaField("beta", "FLOAT64"),
+        bigquery.SchemaField("beta_lower", "FLOAT64"),
+        bigquery.SchemaField("beta_upper", "FLOAT64"),
+        bigquery.SchemaField("z", "FLOAT64"),
+        bigquery.SchemaField("mlog10p", "FLOAT64"),
+        bigquery.SchemaField("mlog10_fdr_q", "FLOAT64"),
+        bigquery.SchemaField("beta_secondary", "FLOAT64"),
+        bigquery.SchemaField("beta_lower_secondary", "FLOAT64"),
+        bigquery.SchemaField("beta_upper_secondary", "FLOAT64"),
+        bigquery.SchemaField("z_secondary", "FLOAT64"),
+        bigquery.SchemaField("mlog10p_secondary", "FLOAT64"),
+        bigquery.SchemaField("mlog10_fdr_q_secondary", "FLOAT64"),
+    ],
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for

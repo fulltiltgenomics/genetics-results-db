@@ -26,6 +26,7 @@ EXPOSED_VIEWS = {
     "colocalization_v",
     "credible_sets_v",
     "datasets_v",
+    "dosage_sensitivity_v",
     "exome_variant_results_v",
     "gene_annotations_v",
     "gene_burden_results_v",
@@ -34,6 +35,9 @@ EXPOSED_VIEWS = {
     "open_chromatin_v",
     "peak_to_gene_v",
     "phenotypes_v",
+    "rcnv_gene_associations_v",
+    "rcnv_segments_v",
+    "rcnv_window_associations_v",
     "variant_annotation_v",
     "variant_effect_v",
 }

@@ -113,6 +113,7 @@ BQ_DATASETS_BY_DATASET_ID = {
     "marderstein_chrombpnet": ["marderstein_chrombpnet"],
     "marderstein_flare": ["marderstein_flare"],
     "siraj_mpra": ["siraj_mpra"],
+    "collins_rcnv_2022": ["Collins_rCNV_2022"],
 }
 
 # results-view `dataset` names the registry claims but that NO results view actually

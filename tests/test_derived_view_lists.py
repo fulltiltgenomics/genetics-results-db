@@ -38,6 +38,9 @@ LINTED_VIEWS = {
     "mpra_v",
     "open_chromatin_v",
     "peak_to_gene_v",
+    "rcnv_gene_associations_v",
+    "rcnv_segments_v",
+    "rcnv_window_associations_v",
     "variant_effect_v",
 }
 
@@ -45,6 +48,7 @@ MATERIALIZED_VIEWS = {"credible_sets_v"}
 
 CROSS_CHECK_EXCLUDED = {
     "datasets_v",
+    "dosage_sensitivity_v",
     "gene_annotations_v",
     "phenotypes_v",
     "variant_annotation_v",
