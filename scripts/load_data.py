@@ -447,7 +447,7 @@ SCHEMAS = {
     # genetics-results-munge/scripts/munge_rcnv.sh --product segments). the source TSV's
     # bare `start`/`end` are loaded as `segment_start`/`segment_end` (a table queried by
     # model-written SQL should not need a reserved keyword backticked). NA is the null
-    # marker: segment_start/segment_end are NA for the 10 segments whose GRCh38 lift failed,
+    # marker: segment_start/segment_end are NA for the segments with no GRCh38 lift at all,
     # and `credints` is NA where every credible interval of a segment failed to lift. The six
     # ';'-joined list columns load as written and are SPLIT into ARRAY<STRING> by
     # rcnv_segments_v — DERIVED_COLUMNS only materialises columns the TSV does not carry.
