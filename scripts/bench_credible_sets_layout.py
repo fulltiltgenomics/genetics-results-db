@@ -230,10 +230,6 @@ def fmt(n):
     return "n/a" if n is None else f"{n:,}"
 
 
-def gb(n):
-    return None if n is None else n / 1e9
-
-
 # ------------------------------------------------------------------------------ main
 
 def cmd_shapes(client, args):

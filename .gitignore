@@ -18,7 +18,9 @@ build/
 *.swo
 
 # Secrets
-.env
+# every .env variant holds real credentials; the committed example does not
+.env*
+!.env.example
 *.key
 credentials.json
 service-account.json
