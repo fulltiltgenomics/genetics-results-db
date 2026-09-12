@@ -43,7 +43,10 @@ CREATE TABLE IF NOT EXISTS `genetics_results.credible_sets`
   alt STRING NOT NULL OPTIONS(description="Alternate allele"),
   variant STRING NOT NULL OPTIONS(description="Variant identifier (chr:pos:ref:alt); clustering key"),
   mlog10p FLOAT64 OPTIONS(description="-log10(p-value)"),
-  beta FLOAT64 NOT NULL OPTIONS(description="Effect size"),
+  -- nullable, like mlog10p and se beside it. The EstBB-UKBB NMR fine-mapping publishes no
+  -- effect size for 5,004 of its variants: their z-score overflowed in the source and is not
+  -- recoverable, so requiring beta would mean dropping exactly the strongest signals
+  beta FLOAT64 OPTIONS(description="Effect size"),
   se FLOAT64 OPTIONS(description="Standard error"),
   pip FLOAT64 NOT NULL OPTIONS(description="Posterior inclusion probability"),
   cs_id STRING NOT NULL OPTIONS(description="Credible set ID"),
