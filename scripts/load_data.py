@@ -45,7 +45,8 @@ SCHEMAS = {
         bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("variant", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("mlog10p", "FLOAT64"),
-        bigquery.SchemaField("beta", "FLOAT64", mode="REQUIRED"),
+        # nullable: see the comment on the same column in schemas/credible_sets.sql
+        bigquery.SchemaField("beta", "FLOAT64"),
         bigquery.SchemaField("se", "FLOAT64"),
         bigquery.SchemaField("pip", "FLOAT64", mode="REQUIRED"),
         bigquery.SchemaField("cs_id", "STRING", mode="REQUIRED"),

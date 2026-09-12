@@ -95,6 +95,7 @@ BQ_DATASETS_BY_DATASET_ID = {
     "pgc_scz": ["PGC"],
     "pgc_bip": ["PGC"],
     "pgc_scz_finemap": ["PGC_SCZ_2022"],
+    "nmr_meta_finemap": ["UKBB_EUR_NMR_2026"],
     "open_targets": ["Open_Targets_26.06"],
     "genebass_exome": ["genebass"],
     "genebass_gene_based": ["genebass"],
@@ -144,6 +145,14 @@ ABSENT_FROM_RESULTS = {
     # unlisting it there when the data is genuinely missing fails the build, while listing
     # it when the data is present hides rows in silence.
     "IIBDGC": (("finngen",), "ibd_gwas registered but its credible sets are not loaded"),
+    # same shape: registered in both profiles, but the munged files were only staged into the
+    # daly bucket and only loaded into daly's BigQuery. finngen-commons is not writable from
+    # where this landed, so the finngen side is registry-only until someone with that access
+    # stages it (see genetics-results-api finngen/credible_sets.py for the steps).
+    "UKBB_EUR_NMR_2026": (
+        ("finngen",),
+        "nmr_meta_finemap registered but its credible sets are not loaded",
+    ),
     # eQTL Catalogue sub-studies present in the collection metadata whose fine-mapping is not
     # part of the imported release; the other ~840 QTD ids are live. Not profile-scoped:
     # validate() errors when a listed name IS live, and it does not for these.
@@ -280,6 +289,23 @@ def _finngen_drugs(items, entry):
     } for item in items]
 
 
+def _quantitative_pheweb(items, entry):
+    """A pheweb-shaped JSON of purely quantitative traits, with a per-phenotype `num_samples`.
+
+    `_finngen_pheweb` can only reach a sample size through `num_cases`, which for a
+    quantitative trait would put the whole cohort in a case count and leave n_controls at 0.
+    """
+    return [{
+        "trait": item.get("phenocode") or "",
+        "trait_name": item.get("phenostring") or None,
+        "trait_type": "quantitative",
+        "category": item.get("category") or None,
+        "n_cases": None,
+        "n_controls": None,
+        "n_samples": safe_int(item.get("num_samples")) or safe_int(entry.get("n_samples")),
+    } for item in items]
+
+
 def _open_targets(items, entry):
     rows = []
     for item in items:
@@ -344,6 +370,7 @@ _PHENOTYPE_HARMONIZERS = {
     "finngen_r13": _finngen_pheweb,
     "finngen_kanta": _finngen_kanta,
     "finngen_drugs": _finngen_drugs,
+    "quantitative_pheweb": _quantitative_pheweb,
     "open_targets": _open_targets,
     "genebass": _genebass,
 }
