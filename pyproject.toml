@@ -37,4 +37,32 @@ dev = [
     # dependence in api.main, since fixed — was only reachable outside the declared setup.
     # `-p no:randomly` restores a fixed order when bisecting.
     "pytest-randomly>=4.0",
+    # pinned to match the siblings: the pre-commit lint gate is shared across the
+    # suite, and two ruff versions mean the same file passes in one repo and fails
+    # in the next
+    "ruff==0.15.12",
 ]
+
+[tool.ruff]
+# the declared floor above, not the 3.13 that happens to be in .venv — targeting the
+# interpreter you have lets syntax through that the supported one cannot parse
+target-version = "py312"
+# sibling worktrees live under .claude/worktrees and carry their own copy of every
+# source file; without this, ruff reports each finding once per checked-out branch
+exclude = [".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+# E501: line too long (handled by formatter)
+# E402: module level import not at top of file (tests insert the repo root on sys.path
+#       before importing the app)
+# E741: ambiguous name (`l`) — style only, and every occurrence across the suite is a
+#       loop variable, so it blocks commits without ever catching a defect
+ignore = ["E501", "E402", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# tests share fixtures by importing them from a sibling test module and then taking
+# them as test-function parameters. pyflakes sees the parameter rebinding the imported
+# name and reports a redefinition; it cannot tell that apart from a genuine one, and
+# every F811 in tests/ today is this pattern
+"tests/*" = ["F811"]

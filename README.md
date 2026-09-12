@@ -58,9 +58,17 @@ in different orders. Reproduce a run with `-p randomly --randomly-seed=<seed>`, 
 order with `-p no:randomly` when bisecting:
 
 ```bash
-uv pip install -e '.[dev]'
+uv pip install -r pyproject.toml --extra dev
 pytest tests/
 ```
+
+**Not `uv pip install -e '.[dev]'`.** That command cannot succeed here and never has:
+`pyproject.toml` declares no `[build-system]`, so the build falls back to setuptools,
+which refuses a flat layout carrying more than one top-level directory (`api`,
+`schemas`, and `configs` once `sync-datasets.sh` has run). Nothing is lost by not
+installing the project — `api` is reached through `sys.path` rather than as an installed
+package, as described below — but the dev extra has to be requested against the
+requirements file instead, or `ruff` and `pytest` never arrive.
 
 `api` is a **namespace package** reached through `sys.path`, not an installed one, and
 namespace packages merge every matching directory on `sys.path`. A `PYTHONPATH` pointing at
@@ -68,6 +76,23 @@ another checkout of this repo would therefore add that tree's `api/` to `api.__p
 let tests import source from it. `tests/conftest.py` aborts the run in `pytest_configure`
 when any `api.__path__` entry falls outside the pytest rootdir
 (genetics-results-suite-6o3); it is silent otherwise.
+
+## Linting
+
+```bash
+ruff check                      # the whole repo
+scripts/lint-staged.sh          # only what is staged — what the pre-commit hook runs
+scripts/lint-staged.sh --all    # the whole repo, via the same resolution logic
+```
+
+Run `scripts/install-git-hooks.sh` once per clone. It wires `core.hooksPath`, which no
+clone carries, so that `pre-commit` runs both `scripts/check-doc-drift.sh` (warns) and
+`scripts/lint-staged.sh` (**blocks the commit** on a finding). `core.hooksPath` is shared
+across worktrees, so that one run covers every worktree too.
+
+The gate looks for ruff in this checkout's `.venv`, then the **main checkout's** (a
+worktree has none of its own), then `PATH`, then `uvx` — and fails the commit if it finds
+none, rather than passing it unchecked. `git commit --no-verify` is the deliberate bypass.
 
 ## Run the REST API server
 

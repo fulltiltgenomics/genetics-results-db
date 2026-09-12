@@ -34,12 +34,19 @@ Changing a path on the left makes the doc on the right wrong until it is updated
 the same commit. `scripts/check-doc-drift.sh` warns (never blocks) on commits that
 violate this; it runs from the `pre-commit` hook.
 
+The same hook also runs `scripts/lint-staged.sh`, which **does** block: a commit whose
+staged files the linter rejects is refused. Neither hook runs until
+`scripts/install-git-hooks.sh` has been run once in the clone — `core.hooksPath` is
+local git config that no clone carries — and because that setting is shared across
+worktrees, one run also covers every worktree, existing and future.
+
 | changed path | doc to update | what to check |
 |---|---|---|
 | `schemas/**` | `docs/project-spec.md` | data model column tables, partition/cluster clauses, view columns |
 | `api/**` | `docs/project-spec.md`, `README.md` | endpoint table, query parameters, env-var tables, authentication |
 | `scripts/load_*.sh`, `scripts/setup_bigquery.sh`, `scripts/lib/**` | `README.md`, `docs/project-spec.md` | loader list, setup steps, GCS bucket/prefix defaults and the `unset-only`/`unset-or-empty` prefix rule every loader shares |
 | `configs/datasets.yaml` | `docs/project-spec.md` | dataset/resource config — this copy is generated, see below |
+| `scripts/lint-staged.sh`, `scripts/install-git-hooks.sh`, `pyproject.toml` | `README.md`, `docs/project-spec.md` | the lint gate: which commits it blocks, the ruff rule set and its per-file ignores, how ruff is resolved when a worktree has no `.venv` |
 
 A doc is stale the moment it *enumerates* something the code no longer matches.
 Counts and lists rot silently — table lists, endpoint tables, env-var tables, loader
@@ -87,8 +94,16 @@ and `dataset_cross_check` decisions) and
    - Only add comments for tricky or complex parts of the code (explaining WHY something is done)
    - NO redundant and trivial comments that simply restate what the code does
 3. Private fields and methods should be prefixed with underscore
-4. Shell scripts should use `set -euo pipefail` for safety
-5. Git commit messages should be concise and descriptive
+4. Code should pass linting at all times (`ruff check`, or `scripts/lint-staged.sh --all`).
+   The `pre-commit` hook runs `scripts/lint-staged.sh`, which lints the **staged** Python
+   files and **blocks the commit** on a finding; `git commit --no-verify` is the bypass.
+   The rule set is `[tool.ruff.lint]` in `pyproject.toml` and matches the sibling repos,
+   because the same gate runs in all five and a per-repo rule set means the same file
+   passes in one and fails in the next. `tests/*` is exempt from `F811`: the tests share
+   fixtures by importing them from a sibling test module and then taking them as test
+   parameters, which pyflakes cannot tell apart from a real redefinition
+5. Shell scripts should use `set -euo pipefail` for safety
+6. Git commit messages should be concise and descriptive
    - Focus on the "what" and "why" rather than the "how"
    - Avoid listing specific properties, method names, or implementation details
 
