@@ -19,6 +19,7 @@ import argparse
 import os
 import sys
 import uuid
+
 from google.cloud import bigquery
 from google.cloud.bigquery import LoadJobConfig, SourceFormat, WriteDisposition
 

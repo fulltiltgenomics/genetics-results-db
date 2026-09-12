@@ -17,8 +17,9 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.yaml_loader import load_views  # noqa: E402
 from test_sandbox_token_auth import _reload  # noqa: E402
+
+from api.yaml_loader import load_views  # noqa: E402
 
 EXPOSED_VIEWS = {
     "asm_qtl_v",

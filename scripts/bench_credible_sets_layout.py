@@ -417,7 +417,7 @@ def cmd_run(client, args):
     print("=" * 78)
     print("WEIGHTED TOTALS" + ("  (DRY RUN -- estimates)" if args.dry_run else ""))
     print("=" * 78)
-    print(f"weighting         : observed frequency of each shape in the window")
+    print("weighting         : observed frequency of each shape in the window")
     print(f"shapes included   : top {args.top_n} of {len(byfreq):,}")
     print(f"old layout        : {wt_old:>18,} B  ({wt_old / 1e9:9.2f} GB)")
     print(f"new layout        : {wt_new:>18,} B  ({wt_new / 1e9:9.2f} GB)")

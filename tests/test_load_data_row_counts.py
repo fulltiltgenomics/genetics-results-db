@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import load_data  # noqa: E402
 
-
 STAGED = 506961
 
 

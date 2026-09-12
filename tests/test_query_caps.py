@@ -14,9 +14,7 @@ The properties that matter:
 
 import os
 import sys
-import time
 
-import jwt
 import pytest
 from fastapi.testclient import TestClient
 

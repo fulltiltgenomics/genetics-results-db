@@ -16,9 +16,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from test_sandbox_token_auth import SECRET, _reload  # noqa: E402,F401
 from test_internal_query_caps import FakeInternalBQ  # noqa: E402
 from test_query_caps import GB, client, main  # noqa: E402,F401  (fixtures)
+from test_sandbox_token_auth import SECRET, _reload  # noqa: E402,F401
 
 VIEW = "credible_sets_v"
 

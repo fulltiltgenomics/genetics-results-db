@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from test_query_caps import GB, FakeBQ, _Job, _Ref  # noqa: E402
+from test_query_caps import GB, FakeBQ, _Job  # noqa: E402
 from test_sandbox_token_auth import SECRET, SIGNING_KEY, _mint, _reload  # noqa: E402
 
 LEAD = {"variant": "8:52700000:A:G", "pip": 0.93, "nested": {"n": 2}}

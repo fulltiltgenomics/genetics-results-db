@@ -5,8 +5,8 @@ Provides SQL query interface to genetics fine-mapping and colocalization data.
 
 import hmac
 import json
-import os
 import logging
+import os
 import sys
 import threading
 import time
@@ -19,9 +19,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from google.cloud import bigquery
 from google.api_core.exceptions import BadRequest, Forbidden, NotFound
+from google.cloud import bigquery
+from pydantic import BaseModel, Field
 
 try:  # packaged as `api.` in the image, run as a bare module in some scripts
     from api import sandbox_auth, sandbox_budget
