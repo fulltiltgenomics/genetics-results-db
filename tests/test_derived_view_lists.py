@@ -18,12 +18,13 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+from generate_resource_sql import resource_derivation  # noqa: E402
+from live_dataset_scope import excluded_views  # noqa: E402
+
 from api.yaml_loader import (  # noqa: E402
     load_dataset_cross_check_exclusions,
     load_resource_derivation,
 )
-from generate_resource_sql import resource_derivation  # noqa: E402
-from live_dataset_scope import excluded_views  # noqa: E402
 
 DATASETS_YAML = os.path.join(os.path.dirname(__file__), "..", "configs", "datasets.yaml")
 

@@ -17,15 +17,20 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from test_sandbox_token_auth import SECRET, SIGNING_KEY, _mint, _reload  # noqa: E402,F401
 from test_query_caps import (  # noqa: E402
     GB,
-    _Result,
     _fake,
     _post,
-    client,  # noqa: F401  (fixture)
+    _Result,
     clean_budget,  # noqa: F401  (fixture)
+    client,  # noqa: F401  (fixture)
     main,  # noqa: F401  (fixture)
+)
+from test_sandbox_token_auth import (  # noqa: E402,F401
+    SECRET,
+    SIGNING_KEY,
+    _mint,
+    _reload,
 )
 
 

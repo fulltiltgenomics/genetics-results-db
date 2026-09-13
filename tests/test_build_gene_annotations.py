@@ -18,7 +18,6 @@ from build_gene_annotations import (  # noqa: E402
     full_lineage_groups,
 )
 
-
 # family hierarchy: root(1) -> mid(2) -> leaf(3); plus a standalone group(9)
 HIERARCHY_CLOSURE = pl.DataFrame(
     {

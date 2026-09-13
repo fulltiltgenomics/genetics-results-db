@@ -19,6 +19,8 @@ import argparse
 import os
 import sys
 import uuid
+
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from google.cloud.bigquery import LoadJobConfig, SourceFormat, WriteDisposition
 
@@ -44,7 +46,8 @@ SCHEMAS = {
         bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("variant", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("mlog10p", "FLOAT64"),
-        bigquery.SchemaField("beta", "FLOAT64", mode="REQUIRED"),
+        # nullable: see the comment on the same column in schemas/credible_sets.sql
+        bigquery.SchemaField("beta", "FLOAT64"),
         bigquery.SchemaField("se", "FLOAT64"),
         bigquery.SchemaField("pip", "FLOAT64", mode="REQUIRED"),
         bigquery.SchemaField("cs_id", "STRING", mode="REQUIRED"),
@@ -620,9 +623,12 @@ def load_table(
     Returns (job, rows_written) for the job that produced rows in the target
     table. `rows_written` is None on the direct path, where the job has not been
     awaited yet and the caller reads it off the completed LoadJob; the staging
-    path has necessarily already awaited its jobs and returns the count, because
-    BigQuery publishes no rows-written statistic for the SELECT it ends with
-    (see the staging branch).
+    path has necessarily already awaited its jobs and returns the INSERT's
+    `num_dml_affected_rows`.
+
+    The staging path never creates the target: it inserts into the table
+    `scripts/setup_bigquery.sh` made from `schemas/*.sql`, which is where the
+    NOT NULL modes and column descriptions come from.
     """
 
     if table_type not in SCHEMAS:
@@ -704,6 +710,19 @@ def load_table(
             staging_schema.append(f)
     staging_id = f"{table_id}__staging_{uuid.uuid4().hex[:8]}"
 
+    try:
+        target = client.get_table(table_id)
+    except NotFound:
+        raise RuntimeError(
+            f"target table {table_id} does not exist: create it with "
+            f"scripts/setup_bigquery.sh first (a table the loader created would "
+            f"carry neither NOT NULL modes nor column descriptions)"
+        ) from None
+    if write_disposition not in ("WRITE_APPEND", "WRITE_TRUNCATE", "WRITE_EMPTY"):
+        raise ValueError(f"unknown write disposition {write_disposition!r}")
+    if write_disposition == "WRITE_EMPTY" and target.num_rows:
+        raise RuntimeError(f"WRITE_EMPTY: {table_id} already holds {target.num_rows} rows")
+
     load_config = LoadJobConfig(
         schema=staging_schema,
         source_format=SourceFormat.CSV,
@@ -744,25 +763,26 @@ def load_table(
             else:
                 col_exprs.append(f"`{f.name}`")
 
-        sql = f"SELECT {', '.join(col_exprs)} FROM `{staging_id}`"
-        query_config = bigquery.QueryJobConfig(
-            destination=table_id,
-            write_disposition=getattr(WriteDisposition, write_disposition),
-            create_disposition=bigquery.CreateDisposition.CREATE_IF_NEEDED,
-            query_parameters=params,
+        # DML into the existing table, not a query job with destination=table_id: a
+        # destination-table WRITE_TRUNCATE replaces the table's schema with the query's
+        # result schema, silently dropping every NOT NULL mode and column description.
+        # An INSERT keeps the committed DDL and has BigQuery enforce NOT NULL on the
+        # loaded rows.
+        columns = ", ".join(f"`{f.name}`" for f in full_schema)
+        sql = (
+            f"INSERT INTO `{table_id}` ({columns})\n"
+            f"SELECT {', '.join(col_exprs)} FROM `{staging_id}`"
         )
+        query_config = bigquery.QueryJobConfig(query_parameters=params)
         annotations = [f"{k}={v!r}" for k, v in const_columns.items()]
         annotations += [f"computed {name}" for name in derived_columns]
+        if write_disposition == "WRITE_TRUNCATE":
+            print(f"Truncating {table_id}...")
+            client.query(f"TRUNCATE TABLE `{table_id}`").result()
         print(f"Projecting staging -> {table_id} ({', '.join(annotations)})...")
         query_job = client.query(sql, job_config=query_config)
         query_job.result()
-        # BigQuery reports no rows-written statistic for a SELECT into a destination
-        # table: it is not DML, so num_dml_affected_rows stays unset, and result() /
-        # the destination's num_rows both describe the table AFTER the write, which
-        # over-reports under WRITE_APPEND once earlier files are already in it. The
-        # projection is an unfiltered 1:1 SELECT over the staging table, so the rows
-        # it wrote are exactly the rows staged.
-        return query_job, staged_rows
+        return query_job, query_job.num_dml_affected_rows
     finally:
         client.delete_table(staging_id, not_found_ok=True)
         print(f"  dropped staging {staging_id}")

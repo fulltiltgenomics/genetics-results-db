@@ -5,8 +5,8 @@ Provides SQL query interface to genetics fine-mapping and colocalization data.
 
 import hmac
 import json
-import os
 import logging
+import os
 import sys
 import threading
 import time
@@ -19,9 +19,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from google.cloud import bigquery
 from google.api_core.exceptions import BadRequest, Forbidden, NotFound
+from google.cloud import bigquery
+from pydantic import BaseModel, Field
 
 try:  # packaged as `api.` in the image, run as a bare module in some scripts
     from api import sandbox_auth, sandbox_budget
@@ -567,10 +567,10 @@ _BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
 _VALUES_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _VALUES_CACHE_TTL_SECONDS = 3600
 
-# View-only derived columns aren't in any base table, and BigQuery reports all
-# view columns as NULLABLE. These are deterministic non-null transforms of
-# REQUIRED base columns, so declare their true mode here (anything not listed
-# falls back to NULLABLE): `variant` = CONCAT of REQUIRED chr/pos/ref/alt;
+# View-only derived columns aren't in any base table, and BigQuery reports every
+# scalar view column as NULLABLE (only REPEATED survives). These are deterministic
+# non-null transforms of REQUIRED base columns, so declare their true mode here
+# (anything not listed falls back to NULLABLE): `variant` = CONCAT of REQUIRED chr/pos/ref/alt;
 # `resource*` = CASE over REQUIRED dataset with a non-null ELSE. `maf` is
 # intentionally absent — LEAST(aaf, 1-aaf) is NULL when the nullable aaf is.
 _DERIVED_COLUMN_MODES = {
@@ -818,9 +818,11 @@ def authorize_query(sql: str, job_config: bigquery.QueryJobConfig) -> "bigquery.
     except Forbidden as e:
         # HTTP 403 is not only "denied": BigQuery also returns it for `quotaExceeded`,
         # `billingNotEnabled` and `blocked`, and `from_http_status` maps every one of them to
-        # `Forbidden` regardless of reason. `quotaExceeded` is not in the client's
-        # `_RETRYABLE_REASONS`, so a project over its concurrent-query quota surfaces here
-        # verbatim. Answering those with the allow-list refusal would report a degraded service
+        # `Forbidden` regardless of reason. `policyViolation` — a table in a project behind
+        # a VPC Service Controls perimeter — is a 403 as well and takes the 503 below,
+        # although it is a caller-chosen reference rather than degradation. `quotaExceeded`
+        # is not in the client's `_RETRYABLE_REASONS`, so a project over its concurrent-query
+        # quota surfaces here verbatim. Answering those with the allow-list refusal would report a degraded service
         # as the caller's bad query — a 4xx nothing retries and nothing alerts on. Discriminate
         # on the reason; `errors` may be absent or empty.
         reason = (e.errors or [{}])[0].get("reason")
@@ -837,8 +839,11 @@ def authorize_query(sql: str, job_config: bigquery.QueryJobConfig) -> "bigquery.
         # a genuine denial. This is *not* necessarily a table outside the exposed set — an IAM
         # edit, an expired condition or a policy tag on an allow-listed view's columns denies
         # one too — and the referencedTables that would tell them apart do not exist, because
-        # the job never started. So log it at error (denial on an exposed table is an outage)
-        # and phrase the refusal as the possibility it is.
+        # the job never started. DML and DDL against an exposed table land here as well: the
+        # read-only service account lacks bigquery.tables.updateData/create, so the dry run
+        # refuses before statement_type below is ever inspected, and their author sees the
+        # allow-list wording rather than the SELECT-only one. So log it at error (denial on
+        # an exposed table is an outage) and phrase the refusal as the possibility it is.
         #
         # BigQuery's denial text stays out of the response because the caller has no use for
         # it: it names a fully-qualified table the caller may never have written — for a bare
@@ -915,10 +920,13 @@ async def get_schema(http_request: Request, table: str | None = None):
             raw_cat_values = _get_categorical_values(table_name, caps)
             cat_values = _compact_categorical_values(raw_cat_values)
 
-            # get row count and column modes from the base table: views report
-            # 0 rows and always-NULLABLE modes, so read the underlying table for
-            # both. View-only derived columns (resource, variant, maf) aren't in
-            # the base table and fall back to the view's mode.
+            # get row count and scalar column modes from the base table: a view reports
+            # 0 rows and NULLABLE for every scalar column, so read the underlying table
+            # for both. View-only derived columns (resource, variant, maf) aren't in the
+            # base table and fall back to the view's mode. REPEATED is the one mode a view
+            # does report, and it is the only signal that the column is an ARRAY —
+            # rcnv_segments_v SPLITs scalar STRING base columns — so the base table's
+            # scalar mode must not replace it.
             row_count = 0
             base_modes: dict[str, str] = {}
             try:
@@ -937,7 +945,12 @@ async def get_schema(http_request: Request, table: str | None = None):
                 col: dict[str, Any] = {
                     "name": field.name,
                     "type": field.field_type,
-                    "mode": base_modes.get(field.name) or _DERIVED_COLUMN_MODES.get(field.name, field.mode),
+                    "mode": (
+                        field.mode
+                        if field.mode == "REPEATED"
+                        else base_modes.get(field.name)
+                        or _DERIVED_COLUMN_MODES.get(field.name, field.mode)
+                    ),
                     "description": overrides.get(field.name, field.description or ""),
                 }
                 if field.name in cat_values:

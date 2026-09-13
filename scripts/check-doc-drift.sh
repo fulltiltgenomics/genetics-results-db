@@ -43,6 +43,9 @@ check '^scripts/(load_[a-z_]*\.sh$|setup_bigquery\.sh$|lib/)' "$DOCS_SPEC" \
 check '^configs/datasets\.yaml$' '^docs/project-spec\.md$' \
     'configs/datasets.yaml -> docs/project-spec.md (dataset/resource config; this copy is GENERATED — genetics-results-suite is canonical, update its docs too)'
 
+check '^(scripts/(lint-staged|install-git-hooks)\.sh|pyproject\.toml)$' "$DOCS_SPEC" \
+    'lint gate (scripts/lint-staged.sh, install-git-hooks.sh, pyproject.toml) -> README.md + docs/project-spec.md (which commits it blocks, the ruff rule set and its per-file ignores, how ruff is resolved in a worktree)'
+
 if [ "$found" -eq 1 ]; then
     printf '\n  Update the doc in this commit, or note why it does not apply.\n' >&2
     printf '  Not blocking. Mappings live in CLAUDE.md > Documentation ownership.\n\n' >&2
