@@ -1,9 +1,12 @@
-"""Tests for load_table's (job, rows_written) contract.
+"""Tests for load_table's (job, rows_written) contract and the staging projection.
 
-Regression guard for "Loaded None rows": the staging path finishes with a SELECT
-into a destination table, which BigQuery does not treat as DML and publishes no
-rows-written statistic for, so the count cannot be read back off that job and has
-to be carried out of load_table explicitly.
+Regression guard for "Loaded None rows": the staging path ends in an INSERT whose
+`num_dml_affected_rows` is the count, and load_table has to carry it out explicitly
+because the caller cannot read `output_rows` off a query job.
+
+The projection has to be DML into the existing table rather than a query job with a
+destination: a destination-table WRITE_TRUNCATE replaces the schema and drops every
+NOT NULL mode and column description.
 
 Client-free: the BigQuery client is a stub, so no project or network is needed.
 """
@@ -13,12 +16,15 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from google.api_core.exceptions import NotFound
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import load_data  # noqa: E402
 
 STAGED = 506961
+# distinct from STAGED only so a test can tell which job the count was read from
+INSERTED = 506960
 
 
 class _FakeLoadJob:
@@ -33,15 +39,12 @@ class _FakeLoadJob:
 
 
 class _FakeQueryJob:
-    """A QueryJob writing to a destination exposes neither of the row-count fields."""
-
-    def __init__(self):
+    def __init__(self, sql):
+        self.sql = sql
         self.errors = None
-        self.num_dml_affected_rows = None  # not DML, so never populated
+        self.num_dml_affected_rows = INSERTED if sql.startswith("INSERT") else None
 
     def result(self):
-        # a RowIterator over the destination table; its total_rows describes the
-        # table AFTER the write, which is why it cannot be used as rows-written
         return MagicMock(total_rows=999_999)
 
 
@@ -51,8 +54,12 @@ def client(monkeypatch):
     c.load_table_from_uri.side_effect = lambda uri, table, job_config=None: (
         _FakeLoadJob(STAGED) if "staging" in table else _FakeLoadJob(1234)
     )
-    c.query.return_value = _FakeQueryJob()
+    c.query.side_effect = lambda sql, job_config=None: _FakeQueryJob(sql)
     return c
+
+
+def _queries(client):
+    return [call.args[0] for call in client.query.call_args_list]
 
 
 def _direct_path_tables():
@@ -80,12 +87,13 @@ def test_direct_path_defers_the_count_to_the_caller(client, table_type):
 
     assert rows is None
     assert job.result_calls == 0, "awaiting here would lose job.errors on failure"
+    assert client.query.call_count == 0
     # main() resolves it off the completed job, as it always did
     job.result()
     assert job.output_rows == 1234
 
 
-def test_staging_path_returns_the_staged_row_count(client):
+def test_staging_path_returns_the_insert_row_count(client):
     """hla_associations is a CHR_STRING_TABLE and injects `dataset`, so it stages."""
     job, rows = load_data.load_table(
         client,
@@ -95,28 +103,67 @@ def test_staging_path_returns_the_staged_row_count(client):
         const_columns={"dataset": "finngen_hla"},
     )
 
-    assert rows == STAGED
-    # the projection is an unfiltered 1:1 SELECT over staging, so staged == written
+    assert job.sql.startswith("INSERT")
+    assert rows == INSERTED == job.num_dml_affected_rows
     assert not hasattr(job, "output_rows")
-    assert job.num_dml_affected_rows is None
-    assert job.result().total_rows != rows, "destination total is not rows-written"
 
 
-def test_staging_count_survives_the_old_getattr_lookups(client):
-    """The two fields the previous code consulted are both absent — hence None."""
-    job, rows = load_data.load_table(
+def test_write_truncate_truncates_then_inserts_into_the_existing_table(client):
+    load_data.load_table(
         client,
         "gs://b/finngen_hla.tsv.gz",
         "p.d.hla_associations",
         "hla_associations",
+        write_disposition="WRITE_TRUNCATE",
         const_columns={"dataset": "finngen_hla"},
     )
 
-    old_style = getattr(job, "output_rows", None)
-    if old_style is None:
-        old_style = getattr(job, "num_dml_affected_rows", None)
-    assert old_style is None
-    assert rows == STAGED
+    truncate, insert = _queries(client)
+    assert truncate == "TRUNCATE TABLE `p.d.hla_associations`"
+    columns = ", ".join(f"`{f.name}`" for f in load_data.SCHEMAS["hla_associations"])
+    assert insert.startswith(f"INSERT INTO `p.d.hla_associations` ({columns})\n")
+    assert "__staging_" in insert
+    for call in client.query.call_args_list:
+        config = call.kwargs.get("job_config")
+        assert config is None or config.destination is None
+        assert config is None or config.create_disposition is None
+    # the injected constant travels as a query parameter, never as a literal
+    insert_config = client.query.call_args_list[1].kwargs["job_config"]
+    assert [(q.name, q.value) for q in insert_config.query_parameters] == [
+        ("const_dataset", "finngen_hla")
+    ]
+
+
+def test_write_append_issues_no_truncate(client):
+    load_data.load_table(
+        client,
+        "gs://b/finngen_hla.tsv.gz",
+        "p.d.hla_associations",
+        "hla_associations",
+        write_disposition="WRITE_APPEND",
+        const_columns={"dataset": "finngen_hla"},
+    )
+
+    (insert,) = _queries(client)
+    assert insert.startswith("INSERT INTO `p.d.hla_associations` (")
+
+
+def test_missing_target_table_points_at_setup_bigquery(client):
+    client.get_table.side_effect = NotFound("p.d.hla_associations")
+
+    with pytest.raises(RuntimeError, match="scripts/setup_bigquery.sh"):
+        load_data.load_table(
+            client,
+            "gs://b/finngen_hla.tsv.gz",
+            "p.d.hla_associations",
+            "hla_associations",
+            write_disposition="WRITE_TRUNCATE",
+            const_columns={"dataset": "finngen_hla"},
+        )
+
+    # refused before anything was staged or truncated
+    assert client.load_table_from_uri.call_count == 0
+    assert client.query.call_count == 0
 
 
 @pytest.mark.parametrize(
@@ -124,8 +171,10 @@ def test_staging_count_survives_the_old_getattr_lookups(client):
     sorted(load_data.CHR_STRING_TABLES),
 )
 def test_every_chr_string_table_takes_the_staging_path(client, table_type):
-    """These all convert chr, so none of them can report a count off its job."""
+    """These all convert chr, so none of them can report a count off a load job."""
     job, rows = load_data.load_table(
         client, "gs://b/f.tsv.gz", f"p.d.{table_type}", table_type
     )
-    assert rows == STAGED
+    assert rows == INSERTED
+    (insert,) = _queries(client)
+    assert insert.startswith(f"INSERT INTO `p.d.{table_type}` (")
