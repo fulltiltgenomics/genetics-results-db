@@ -103,7 +103,7 @@ See [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md).
 | alt | STRING | Yes | Alternate allele |
 | variant | STRING | Yes | Variant identifier (chr:pos:ref:alt), computed at load time. Clustering key |
 | mlog10p | FLOAT64 | No | -log10(p-value) |
-| beta | FLOAT64 | Yes | Effect size |
+| beta | FLOAT64 | No | Effect size |
 | se | FLOAT64 | No | Standard error |
 | pip | FLOAT64 | Yes | Posterior inclusion probability |
 | cs_id | STRING | Yes | Credible set ID |
@@ -571,10 +571,10 @@ Dataset registry: what every `dataset` value appearing in the results views actu
 |---|---|---|---|
 | dataset | STRING | No | Results-view dataset name; NULL when the dataset has no BigQuery presence |
 | dataset_id | STRING | Yes | Primary `datasets.yaml` registry key |
-| dataset_ids | ARRAY&lt;STRING&gt; | No | Every registry key merged into this row |
+| dataset_ids | ARRAY&lt;STRING&gt; | REPEATED | Every registry key merged into this row |
 | resource | STRING | Yes | Resource name; matches the derived `resource` column of the results views |
 | resource_label | STRING | No | Display label for the resource |
-| resource_aliases | ARRAY&lt;STRING&gt; | No | Alternative names users write for the resource |
+| resource_aliases | ARRAY&lt;STRING&gt; | REPEATED | Alternative names users write for the resource |
 | version | STRING | No | Dataset version label |
 | description | STRING | No | What the dataset is, its cohort and caveats; merged entries joined with ` \| ` |
 | author | STRING | No | Producing consortium; for QTD sub-studies the source study label |
@@ -626,7 +626,7 @@ table name it wraps (`credible_sets`), and 404 on anything else.
 - `max_rows` (default 1000, max 100000): Maximum rows to return
 - `dry_run` (default false): Estimate query cost without executing
 
-Every query is authorized before it runs (see Security → Query authorization). Rejections are 400 for a non-`SELECT` statement, a syntax error or a name that resolves to nothing, 403 for a `SELECT` that references a table outside the exposed views or that BigQuery denies (denial text logged rather than returned), and 503 for a BigQuery 403 that is not a denial at all — a quota, billing or block failure, which is the service being degraded rather than the caller being wrong.
+Every query is authorized before it runs (see Security → Query authorization). Rejections are 400 for a statement the dry run parses as something other than a single `SELECT` (a script, `EXECUTE IMMEDIATE`, `CREATE TEMP TABLE`), a syntax error or a name that resolves to nothing; 403 for a `SELECT` that references a table outside the exposed views or that BigQuery denies (denial text logged rather than returned) — DML and DDL against an exposed table arrive as this 403 rather than as 400, because the read-only service account makes the dry run itself refuse them before the statement type is inspected; and 503 for a BigQuery 403 whose reason is anything other than `accessDenied` — a quota, billing or block failure, and today also the `policyViolation` a table in a VPC-Service-Controls-protected project returns.
 
 ### Query Response Format
 
@@ -657,7 +657,7 @@ because chat-backend and mcp-server both parse this response.
 
 ### Schema Response Format
 
-`/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Column `mode` (NULLABLE/REQUIRED) and `row_count` are read from the underlying base table, since BigQuery views always report every column as NULLABLE. View-only derived columns are declared explicitly: `variant` and `resource`/`resource1`/`resource2` are REQUIRED (non-null transforms of REQUIRED base columns), while `maf` is NULLABLE (`LEAST(aaf, 1-aaf)` with nullable `aaf`). For `credible_sets_v` the base table now answers for `variant`/`resource` directly — they are stored `NOT NULL` columns there, which is why the schema file declares them `NOT NULL` rather than following the nullable stored `variant` of `variant_effect`/`mpra`/`variant_annotation`: it keeps `/schema` reporting REQUIRED as before. Two shapes:
+`/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Column `mode` (NULLABLE/REQUIRED) and `row_count` are read from the underlying base table, since a BigQuery view reports every scalar column as NULLABLE. A REPEATED column keeps the view's own mode: it is the only signal that the column is an ARRAY, and `rcnv_segments_v` SPLITs scalar STRING base columns into arrays, so the base table's mode would erase it. View-only derived columns are declared explicitly: `variant` and `resource`/`resource1`/`resource2` are REQUIRED (non-null transforms of REQUIRED base columns), while `maf` is NULLABLE (`LEAST(aaf, 1-aaf)` with nullable `aaf`). For `credible_sets_v` the base table now answers for `variant`/`resource` directly — they are stored `NOT NULL` columns there, which is why the schema file declares them `NOT NULL` rather than following the nullable stored `variant` of `variant_effect`/`mpra`/`variant_annotation`: it keeps `/schema` reporting REQUIRED as before. Two shapes:
 
 - `allowed_values`: flat list of valid values (e.g. `resource`, `dataset`, `most_severe`).
 - `allowed_values_by_<col>`: mapping from a parent column's value to the values valid for that parent. Used when a column's valid set depends on another (e.g. `data_type` depends on `resource`, `annotation` depends on `resource`).
@@ -742,7 +742,7 @@ This was the only access control besides the cluster NetworkPolicy, which is not
 
 `/query` submits every statement as a **BigQuery dry run first** (`authorize_query`), and only runs it for real if the dry run passes two checks:
 
-1. **`statementType` must be `SELECT`.** Anything else — DDL, DML, `EXECUTE IMMEDIATE`, `EXPORT DATA`, `CALL`, `LOAD`, `GRANT`, or a multi-statement script — is rejected with 400.
+1. **`statementType` must be `SELECT`.** Anything else the dry run parses — `EXECUTE IMMEDIATE`, `CREATE TEMP TABLE`, `EXPORT DATA`, `CALL`, `LOAD`, `GRANT`, or a multi-statement script — is rejected with 400. DML and DDL against an exposed table never reach this check: the read-only service account lacks `bigquery.tables.updateData`/`create`, so the dry run raises `accessDenied` and they get the hedged 403 described in the notes below.
 2. **Every entry in `referencedTables` must be an exposed view or the base table it wraps** (`_ALLOWED_TABLE_IDS`). Anything else is rejected with 403, listing the disallowed tables and the available views.
 
 This replaced a keyword blocklist that scanned whitespace-delimited tokens. That approach was evadable — `EXECUTE IMMEDIATE`, `EXPORT DATA`, `CALL` and `LOAD` were not in the list at all, and comment/newline tricks broke tokenisation — and it never constrained *which* tables a `SELECT` could read. Since the API service account holds project-level `bigquery.dataViewer`, an unconstrained `SELECT` could read every dataset in the project, and `EXPORT DATA` could write results to GCS. Letting BigQuery parse the statement leaves nothing to pattern-match against: the dry run reports the real statement type and the real table set.
@@ -752,7 +752,7 @@ Notes:
 - The dry-run job is created **outside** the endpoint's `try`/`except Exception` block, so its 400/403 reaches the client instead of being converted to a 500.
 - **Each exception type the probe can raise is named explicitly, and the status says whose fault it was** — `BadRequest` and `NotFound` are 400, `Forbidden` is 403 or 503 depending on its `reason`. There is deliberately no `except Exception` around the probe: an unknown `google.api_core` failure escaping as a 500 is honest, whereas a blanket catch would report a broken service as the caller's bad query. Every path fails closed — the statement is rejected before anything runs — so the choice is only about what the caller is told.
 
-  **`Forbidden` is not a synonym for "denied".** `google.api_core.exceptions.from_http_status` maps *every* HTTP 403 to `Forbidden` regardless of BigQuery's `reason`, and BigQuery returns 403 for a family of non-authorization failures — `quotaExceeded` (the project over a concurrent-query or `jobs.insert` quota), `billingNotEnabled`, `blocked`. `quotaExceeded` is **not** in the client's `_RETRYABLE_REASONS` (`google/cloud/bigquery/retry.py`, which retries only `rateLimitExceeded`, `backendError`, `internalError`, `badGateway`), so a project that trips a quota under agent load surfaces here as a plain `Forbidden`. Answering that with the allow-list refusal would tell every caller their query referenced tables outside the exposed set while naming those very tables as available — false, a 4xx that retry logic will not retry, and invisible to alerting because a 403 reads as routine caller error. The handler therefore discriminates on `e.errors[0]["reason"]` (guarded, since `errors` may be absent or empty): anything other than `accessDenied` is logged at **error** and answered **503**, which is retryable and alertable.
+  **`Forbidden` is not a synonym for "denied".** `google.api_core.exceptions.from_http_status` maps *every* HTTP 403 to `Forbidden` regardless of BigQuery's `reason`, and BigQuery returns 403 for a family of non-authorization failures — `quotaExceeded` (the project over a concurrent-query or `jobs.insert` quota), `billingNotEnabled`, `blocked` — and for `policyViolation`, which is what a table in a project behind a VPC Service Controls perimeter returns; that one takes the same 503 today although it is a caller-chosen reference rather than degradation. `quotaExceeded` is **not** in the client's `_RETRYABLE_REASONS` (`google/cloud/bigquery/retry.py`, which retries only `rateLimitExceeded`, `backendError`, `internalError`, `badGateway`), so a project that trips a quota under agent load surfaces here as a plain `Forbidden`. Answering that with the allow-list refusal would tell every caller their query referenced tables outside the exposed set while naming those very tables as available — false, a 4xx that retry logic will not retry, and invisible to alerting because a 403 reads as routine caller error. The handler therefore discriminates on `e.errors[0]["reason"]` (guarded, since `errors` may be absent or empty): anything other than `accessDenied` is logged at **error** and answered **503**, which is retryable and alertable.
 
   A genuine `accessDenied` is answered 403 — but the message may **not** claim the table was outside the exposed set, because that is not knowable here. Denial on an *allow-listed* table is reachable (an IAM edit, an expired IAM condition, column-level security or policy tags on a view's columns, a dataset-ACL edit), and the `referencedTables` that would tell the two cases apart do not exist, since the `query()` call raised before any job existed. The wording is hedged accordingly, and this branch also logs at **error**: a denial on an exposed table is an outage.
 

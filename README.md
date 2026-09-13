@@ -125,10 +125,10 @@ copies of the small tables — `datasets`, `phenotypes`, `gene_annotations` and
 rows, but result *values* are not comparable with production and the dataset is not a
 benchmark target.
 
-No other *service setting* selects a dataset, but `genetics-mcp-server` hardcodes
-`genetics_results.<view>` in its generated SQL and tool descriptions, so its queries are
-rejected 403 by a `genetics_dev`-pointed API rather than following it. `genetics-results-api`
-and `genetics-results-browser` name no BigQuery dataset. See `docs/project-spec.md`.
+No other *service setting* selects a dataset: `genetics-mcp-server` emits bare `<view>_v`
+names, which db-api resolves against `DATASET_ID`, so it follows whichever dataset the API
+is pointed at. `genetics-results-api` and `genetics-results-browser` name no BigQuery
+dataset. See `docs/project-spec.md`.
 
 ## API endpoints
 
@@ -184,7 +184,10 @@ curl -X POST http://localhost:8080/query \
 ## Tables
 
 Queries go through a view (`<table>_v`) per table, which adds derived columns such as
-`variant`, `maf` and `resource`; bare base table names in a query are redirected to the view.
+`variant`, `maf` and `resource`. Bare base table names are allow-listed on `/query` but
+resolve to the base table, so view-only columns (`maf`, and `resource` on most views) need
+the `_v` name; the base-to-view aliasing applies only to `/schema` and
+`/tables/{name}/sample`.
 
 - **credible_sets** — fine-mapped credible set variants (FinnGen, Open Targets, eQTL Catalogue)
 - **colocalization** — colocalization analysis results between datasets

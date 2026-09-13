@@ -6,7 +6,8 @@
 -- dataset_to_resource_rules in datasets.yaml by scripts/generate_resource_sql.py.
 --
 -- The EXCEPT + explicit re-projection is load-bearing, not cosmetic: the base table
--- stores `resource` at ordinal 1 and `variant` at ordinal 10, but every downstream
+-- stores `resource` as its second column and `variant` as its eleventh
+-- (INFORMATION_SCHEMA ordinal_position 2 and 11), but every downstream
 -- reader (API, MCP tools, browser) sees this view's schema, which must stay
 -- byte-identical to the pre-swap one — the 19 original columns in their original
 -- order, then variant, maf, resource. A bare `SELECT *` would silently reorder it.

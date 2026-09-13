@@ -121,7 +121,7 @@ and `dataset_cross_check` decisions) and
 1. All endpoints should have Pydantic models for request/response
 2. Query sanitization must block all write operations
 3. Include cost controls (MAX_BYTES_BILLED) on all queries
-4. Return generated SQL in query responses for transparency
+4. The caller's SQL is logged (the `sql` field of the `/query` access-log line), not echoed in the response
 
 
 ====

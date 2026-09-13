@@ -577,8 +577,9 @@ print([(f.name, f.field_type) for f in
 ```
 
 The `* EXCEPT(variant, resource)` + explicit re-projection in the view is what preserves
-this: the base table stores `resource` at ordinal 1 and `variant` at ordinal 10, so a bare
-`SELECT *` would silently reorder the view's columns.
+this: the base table stores `resource` as its second column and `variant` as its eleventh
+(`INFORMATION_SCHEMA` `ordinal_position` 2 and 11), so a bare `SELECT *` would silently
+reorder the view's columns.
 
 Also confirm `variant` and `resource` still report `mode = REQUIRED` from
 `GET /schema` — that comes from the base table's `NOT NULL`.
