@@ -40,10 +40,10 @@ def load_resource_metadata(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     API-only marker.
     """
     resources = config.get("resources", {})
-    # the original _RESOURCE_METADATA included exactly these resources that
-    # appear in BQ views; API-only resources are excluded
+    # resources with rows in no results view are kept out of the agent-facing metadata.
+    # pgc is deliberately NOT here: credible_sets_v carries PGC rows under it
     _API_ONLY_RESOURCES = {
-        "ukbb_finucane", "finngen_nmr", "gtex", "hpa", "gencc", "monarch", "pgc",
+        "gtex", "hpa", "gencc", "monarch",
     }
 
     result: dict[str, dict[str, Any]] = {}
