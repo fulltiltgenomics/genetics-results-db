@@ -7,7 +7,7 @@ SELECT
     WHEN LOWER(dataset) LIKE 'finngen%mvp_ukbb%' THEN 'finngen_mvp_ukbb'
     WHEN LOWER(dataset) LIKE 'finngen%ukbb%' THEN 'finngen_ukbb'
     WHEN LOWER(dataset) LIKE 'finngen%' THEN 'finngen'
-    WHEN LOWER(dataset) LIKE 'ukbb_eur_nmr%' THEN 'nmr_meta'
+    WHEN LOWER(dataset) = 'nmr_ukbb_est' THEN 'nmr_meta'
     WHEN LOWER(dataset) LIKE 'ukb%' THEN 'ukbb'
     WHEN LOWER(dataset) LIKE 'open_targets%' THEN 'open_targets'
     WHEN LOWER(dataset) LIKE 'covid19_hgi%' THEN 'covid_hgi'

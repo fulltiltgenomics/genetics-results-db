@@ -95,7 +95,7 @@ BQ_DATASETS_BY_DATASET_ID = {
     "pgc_scz": ["PGC"],
     "pgc_bip": ["PGC"],
     "pgc_scz_finemap": ["PGC_SCZ_2022"],
-    "nmr_meta_finemap": ["UKBB_EUR_NMR_2026"],
+    "nmr_ukbb_est": ["nmr_ukbb_est"],
     "open_targets": ["Open_Targets_26.06"],
     "genebass_exome": ["genebass"],
     "genebass_gene_based": ["genebass"],
@@ -149,9 +149,9 @@ ABSENT_FROM_RESULTS = {
     # daly bucket and only loaded into daly's BigQuery. finngen-commons is not writable from
     # where this landed, so the finngen side is registry-only until someone with that access
     # stages it (see genetics-results-api finngen/credible_sets.py for the steps).
-    "UKBB_EUR_NMR_2026": (
+    "nmr_ukbb_est": (
         ("finngen",),
-        "nmr_meta_finemap registered but its credible sets are not loaded",
+        "nmr_ukbb_est registered but its credible sets are not loaded",
     ),
     # eQTL Catalogue sub-studies present in the collection metadata whose fine-mapping is not
     # part of the imported release; the other ~840 QTD ids are live. Not profile-scoped:
