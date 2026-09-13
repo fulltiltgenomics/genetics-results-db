@@ -1035,6 +1035,7 @@ genetics-results-db/
    export PROJECT_ID=your-project-id
    ./scripts/setup_bigquery.sh
    ```
+   This is not optional for the tables `scripts/load_data.py` loads through its staging table (`--const-column`, `CHR_STRING_TABLES`, `CELL_TYPE_PREFIX_TABLES`, `DERIVED_COLUMNS`): the loader `TRUNCATE`s and `INSERT`s into the table `setup_bigquery.sh` made from `schemas/*.sql` and refuses to create it, because a loader-created table would carry neither the NOT NULL modes nor the column descriptions.
 
 2. **Load credible sets and colocalization data from GCS**:
    ```bash

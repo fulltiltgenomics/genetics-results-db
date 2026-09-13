@@ -8,7 +8,7 @@ Cannot yet be used as is without access to restricted data.
 
 ## Loading data to BigQuery
 
-[scripts/setup_bigquery.sh](scripts/setup_bigquery.sh) creates the BigQuery dataset and tables
+[scripts/setup_bigquery.sh](scripts/setup_bigquery.sh) creates the BigQuery dataset and tables. It must run before the loaders: `scripts/load_data.py` inserts into the tables it made from `schemas/*.sql` and refuses to create one, since a loader-created table would carry neither the NOT NULL modes nor the column descriptions.
 
 [scripts/load_credsets_coloc.sh](scripts/load_credsets_coloc.sh) loads credible sets and colocalization results
 
