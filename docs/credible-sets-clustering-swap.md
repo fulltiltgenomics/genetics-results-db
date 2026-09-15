@@ -1,8 +1,10 @@
 # Runbook: re-clustering `credible_sets` on `data_type, resource, variant, pos`
 
-Status: **prepared, not executed.** The schema files, loader and view in this repo already
-describe the target state. This document is the procedure for making the deployed BigQuery
-table match them. Follow it top to bottom; it assumes no prior knowledge of the analysis.
+Status: **executed in both productions** — daly on 2026-09-12, finngen on 2026-09-15, each with
+the pre-swap table kept a week as `credible_sets_pre_swap`. The schema files, loader and view
+in this repo describe the deployed state; §0's warning about `setup_bigquery.sh` no longer
+applies, and the procedure below stays as the record of how the layout is changed. It is
+written to be followed top to bottom and assumes no prior knowledge of the analysis.
 
 ---
 

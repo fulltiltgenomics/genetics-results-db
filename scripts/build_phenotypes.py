@@ -136,23 +136,6 @@ BQ_DATASETS_BY_DATASET_ID = {
 ALL_PROFILES = None
 
 ABSENT_FROM_RESULTS = {
-    # registered and resource-derivation rules exist, but the fine-mapping is not loaded in
-    # every deployment; where it is listed it also produced 3 orphan phenotypes rows
-    # (IBD/CD/UC).
-    # daly is verified live: credible_sets_v holds IIBDGC rows for CD/IBD/UC.
-    # finngen is UNVERIFIED - phewas-development denies bigquery.tables.list to the account
-    # this was last edited from - and is left listed rather than guessed at, because
-    # unlisting it there when the data is genuinely missing fails the build, while listing
-    # it when the data is present hides rows in silence.
-    "IIBDGC": (("finngen",), "ibd_gwas registered but its credible sets are not loaded"),
-    # same shape: registered in both profiles, but the munged files were only staged into the
-    # daly bucket and only loaded into daly's BigQuery. finngen-commons is not writable from
-    # where this landed, so the finngen side is registry-only until someone with that access
-    # stages it (see genetics-results-api finngen/credible_sets.py for the steps).
-    "nmr_ukbb_est": (
-        ("finngen",),
-        "nmr_ukbb_est registered but its credible sets are not loaded",
-    ),
     # eQTL Catalogue sub-studies present in the collection metadata whose fine-mapping is not
     # part of the imported release; the other ~840 QTD ids are live. Not profile-scoped:
     # validate() errors when a listed name IS live, and it does not for these.
