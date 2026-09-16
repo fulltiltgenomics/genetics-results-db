@@ -814,6 +814,14 @@ def authorize_query(sql: str, job_config: bigquery.QueryJobConfig) -> "bigquery.
         # a table that does not exist, which is a 404 from the jobs API. Both mean the
         # statement was rejected before anything ran, so both are the caller's 400 — without
         # this the 404 would escape as a 500.
+        # Logged at info with the statement: a sandbox script's tool result is not persisted
+        # anywhere, so without this line a rejected query is unrecoverable once the turn is
+        # over, and the retries it caused cannot be explained
+        logger.info({
+            "message": "dry run rejected the statement",
+            "sql": sql,
+            "error": e.message,
+        })
         raise HTTPException(status_code=400, detail=f"Invalid query: {e.message}")
     except Forbidden as e:
         # HTTP 403 is not only "denied": BigQuery also returns it for `quotaExceeded`,
@@ -1004,6 +1012,63 @@ async def get_schema(http_request: Request, table: str | None = None):
     return {"resources": _RESOURCE_METADATA, "tables": tables, "warnings": warnings}
 
 
+_table_layouts: dict[str, tuple[str | None, list[str]]] = {}
+
+
+def _table_layout(table_id: str) -> tuple[str | None, list[str]]:
+    """(partition column, clustering columns) of a base table, read once from BigQuery."""
+    if table_id not in _table_layouts:
+        try:
+            meta = bq_client.get_table(table_id)
+            partitioning = meta.range_partitioning or meta.time_partitioning
+            partition = getattr(partitioning, "field", None) if partitioning else None
+            _table_layouts[table_id] = (partition, list(meta.clustering_fields or []))
+        except Exception:
+            # a hint is best effort; the refusal itself does not depend on it
+            _table_layouts[table_id] = (None, [])
+    return _table_layouts[table_id]
+
+
+def _scan_cap_detail(referenced: list, estimated_bytes: int, cap_bytes: int) -> str:
+    """What a caller can do about a query BigQuery refused under `maximum_bytes_billed`.
+
+    The cap is checked against BigQuery's pre-execution estimate, which reflects partition
+    pruning only: an equality on a clustering key (or on a column the view derives, such as
+    `resource`) lowers what a query bills once it runs but never the number the cap is
+    compared to. BigQuery's own message says only how many bytes were "required", and a
+    caller reading that tried narrower row filters twice before finding the partition
+    predicate — so the refusal names the column that actually changes the estimate.
+    """
+    gb = 1024**3
+    layouts = []
+    for ref in referenced:
+        partition, clustering = _table_layout(f"{ref.project}.{ref.dataset_id}.{ref.table_id}")
+        if partition:
+            note = f"{ref.table_id}: add a literal `{partition} = <value>` predicate"
+            if clustering:
+                note += (
+                    f" (clustered on {', '.join(clustering)}, which cuts the bytes billed "
+                    "but not this estimate)"
+                )
+            layouts.append(note)
+        elif clustering:
+            layouts.append(
+                f"{ref.table_id}: not partitioned; clustered on {', '.join(clustering)}, "
+                "so only reading fewer columns lowers the estimate"
+            )
+    detail = (
+        f"Query would scan an estimated {estimated_bytes / gb:.1f} GB, over the "
+        f"{cap_bytes / gb:.0f} GB per-query cap. The cap is checked against BigQuery's "
+        "partition-pruned estimate before the query runs, so filters on other columns do "
+        "not lower it however few rows they match. "
+    )
+    if layouts:
+        detail += "Tables read — " + "; ".join(layouts) + "."
+    else:
+        detail += "Select fewer columns or a narrower table."
+    return detail
+
+
 @app.post("/query", response_model=QueryResponse)
 async def execute_query(request: QueryRequest, http_request: Request):
     """Execute a SQL query against the genetics database."""
@@ -1108,6 +1173,23 @@ async def execute_query(request: QueryRequest, http_request: Request):
         })
         raise HTTPException(status_code=403, detail="Query forbidden")
     except Exception as e:
+        # BigQuery refuses a job over `maximum_bytes_billed` before running it and raises it
+        # as a 500-class InternalServerError, but it is the caller's query, and the fix is a
+        # specific predicate the message has to name — see _scan_cap_detail
+        reason = (getattr(e, "errors", None) or [{}])[0].get("reason")
+        if reason == "bytesBilledLimitExceeded":
+            logger.info({
+                "message": "query refused under the per-query byte cap",
+                "sql": sql,
+                "estimated_bytes": estimated_bytes,
+                "cap_bytes": caps.max_bytes_billed,
+            })
+            raise HTTPException(
+                status_code=400,
+                detail=_scan_cap_detail(
+                    probe.referenced_tables or [], estimated_bytes, caps.max_bytes_billed
+                ),
+            )
         logger.exception("Query execution failed")
         raise HTTPException(status_code=500, detail=str(e))
     finally:

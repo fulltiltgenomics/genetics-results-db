@@ -241,3 +241,79 @@ def test_the_counter_is_bounded_so_a_flood_of_jtis_cannot_grow_it(main):
     for i in range(main._JTI_BUDGET_LRU_SIZE + 50):
         main._charge_aggregate(f"exec-{i}", 1)
     assert len(main._jti_bytes) == main._JTI_BUDGET_LRU_SIZE
+
+
+# --- a refusal under the byte cap names the predicate that lowers the estimate -------------
+
+
+class _Layout:
+    """Enough of google.cloud.bigquery.Table for _table_layout."""
+
+    def __init__(self, partition, clustering):
+        self.range_partitioning = type("P", (), {"field": partition})() if partition else None
+        self.time_partitioning = None
+        self.clustering_fields = clustering
+
+
+class _CappedJob(_Job):
+    def result(self):
+        from google.api_core.exceptions import InternalServerError
+
+        raise InternalServerError(
+            "500 Query exceeded limit for bytes billed: 53687091200. 58281951232 or higher required.",
+            errors=[{"reason": "bytesBilledLimitExceeded", "message": "Query exceeded limit"}],
+        )
+
+
+class _CappedBQ(FakeBQ):
+    def __init__(self, layout):
+        super().__init__(bytes_processed=54 * GB)
+        self.layout = layout
+
+    def query(self, sql, job_config=None):
+        self.configs.append(job_config)
+        if job_config.dry_run:
+            return _Job(job_config, self.total_rows, self.bytes_processed)
+        return _CappedJob(job_config, self.total_rows, self.bytes_processed)
+
+    def get_table(self, ref):
+        return self.layout
+
+
+def test_over_the_byte_cap_is_a_400_naming_the_partition_predicate(main, client, monkeypatch):
+    monkeypatch.setattr(main, "bq_client", _CappedBQ(_Layout("chr", ["dataset", "gene", "trait"])))
+    main._table_layouts.clear()
+
+    resp = _post(client, _mint())
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "54.0 GB" in detail and "50 GB per-query cap" in detail
+    assert "credible_sets_v: add a literal `chr = <value>` predicate" in detail
+    assert "clustered on dataset, gene, trait" in detail
+
+
+def test_over_the_byte_cap_on_an_unpartitioned_table_says_so(main, client, monkeypatch):
+    monkeypatch.setattr(main, "bq_client", _CappedBQ(_Layout(None, ["phenotype", "gene"])))
+    main._table_layouts.clear()
+
+    resp = _post(client, _mint())
+
+    assert resp.status_code == 400
+    assert "not partitioned; clustered on phenotype, gene" in resp.json()["detail"]
+
+
+def test_other_execution_failures_stay_500(main, client, monkeypatch):
+    class _BoomJob(_Job):
+        def result(self):
+            raise RuntimeError("boom")
+
+    class _BoomBQ(FakeBQ):
+        def query(self, sql, job_config=None):
+            self.configs.append(job_config)
+            if job_config.dry_run:
+                return _Job(job_config, self.total_rows, self.bytes_processed)
+            return _BoomJob(job_config, self.total_rows, self.bytes_processed)
+
+    monkeypatch.setattr(main, "bq_client", _BoomBQ())
+    assert _post(client, _mint()).status_code == 500
