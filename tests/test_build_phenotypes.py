@@ -26,6 +26,7 @@ ABSENT = absent_from_results("finngen")
 
 
 RESOURCES = {
+    "brava": {"label": "BRaVa", "aliases": []},
     "finngen": {"label": "FinnGen", "aliases": ["FinnGen"]},
     "pgc": {"label": "PGC", "aliases": ["psychiatric genomics"]},
     "eqtl_catalogue": {"label": "eQTL Catalogue", "aliases": []},
@@ -60,6 +61,12 @@ REGISTRY = {
         "author": "PGC", "publication_date": "2021-05-17", "data_type": "gwas",
         "metadata_file": None, "metadata_harmonizer": None,
     },
+    "brava_gene_based": {
+        "resource": "brava", "version": "2026", "description": "BRaVa gene burden",
+        "author": "BRaVa", "publication_date": "2026-05-24",
+        "data_type": "gene_based", "trait_type": "mixed",
+        "metadata_file": "gs://x/brava_pheno.json", "metadata_harmonizer": "pheweb",
+    },
     "eqtl_catalogue": {
         "resource": "eqtl_catalogue", "version": "R8", "description": "collection",
         "author": "eQTL Catalogue", "publication_date": "2026-01-01",
@@ -93,6 +100,15 @@ METADATA = {
         {"phenocode": "3000963", "phenostring": "Hemoglobin",
          "category": "Quantitative", "num_cases": 447271, "num_controls": 0,
          "num_total": 447271},
+    ],
+    # one file mixing binary and quantitative traits; `category` is the Sex stratum
+    "brava_gene_based": [
+        {"phenocode": "AFib", "phenostring": "Atrial fibrillation", "category": "Both",
+         "num_cases": 34000, "num_controls": 400000},
+        {"phenocode": "AFib|EUR", "phenostring": "Atrial fibrillation", "category": "Both",
+         "num_cases": 30000, "num_controls": 350000, "num_samples": 380000},
+        {"phenocode": "LDLC", "phenostring": "LDL cholesterol", "category": "Both",
+         "num_samples": 420000},
     ],
     "eqtl_catalogue": [
         {"dataset_id": "QTD000001", "study_label": "Alasoo_2018",
@@ -246,6 +262,50 @@ def test_every_coloc_partner_only_dataset_is_mapped():
     colocalization rows, which is the whole reason these entries are kept."""
     for dataset_id in COLOC_PARTNER_ONLY_DATASET_IDS:
         assert BQ_DATASETS_BY_DATASET_ID.get(dataset_id)
+
+
+def test_pheweb_derives_trait_type_from_the_sample_size_keys_not_category():
+    """BRaVa's `category` is the Sex value, so the category-based rule the other
+    harmonizers use would mark every quantitative trait binary."""
+    rows, _ = _phenotypes()
+    by_code = {r["trait_original"]: r for r in rows if r["dataset"] == "BRaVa"}
+    assert by_code["AFib"]["trait_type"] == "binary"
+    assert by_code["LDLC"]["trait_type"] == "quantitative"
+    assert by_code["LDLC"]["n_cases"] is None
+    assert by_code["LDLC"]["n_controls"] is None
+    assert by_code["AFib"]["category"] == "Both"
+
+
+def test_pheweb_keeps_the_stratum_in_the_phenocode():
+    """The results views store 'AFib|EUR' in trait_original; splitting on '|' here would
+    collide the strata with the cross-ancestry meta and drop all but one."""
+    rows, _ = _phenotypes()
+    by_code = {r["trait_original"]: r for r in rows if r["dataset"] == "BRaVa"}
+    assert set(by_code) == {"AFib", "AFib|EUR", "LDLC"}
+    assert by_code["AFib|EUR"]["trait_name"] == "Atrial fibrillation"
+
+
+def test_pheweb_sample_size_prefers_the_stated_total_over_cases_plus_controls():
+    rows, _ = _phenotypes()
+    by_code = {r["trait_original"]: r for r in rows if r["dataset"] == "BRaVa"}
+    assert by_code["AFib"]["n_samples"] == 34000 + 400000
+    assert by_code["AFib|EUR"]["n_samples"] == 380000
+    assert by_code["LDLC"]["n_samples"] == 420000
+
+
+def test_brava_maps_to_its_results_view_dataset():
+    rows = _datasets()
+    brava = next(r for r in rows if r["dataset_id"] == "brava_gene_based")
+    assert brava["dataset"] == "BRaVa"
+    assert brava["resource"] == "brava"
+    assert brava["trait_type"] == "mixed"
+
+
+def test_validate_accepts_brava_once_its_rows_are_live():
+    rows = _datasets()
+    phenotype_rows, _ = _phenotypes()
+    problems = validate(rows, phenotype_rows, {"BRaVa"}, ABSENT)
+    assert not [p for p in problems if "BRaVa" in p]
 
 
 def test_parse_date_drops_partial_dates_rather_than_inventing_them():

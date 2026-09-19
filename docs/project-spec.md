@@ -207,13 +207,13 @@ Variant-level association results from exome sequencing studies (GeneBASS, IBD e
 
 ### gene_burden_results
 
-Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA2). **Unfiltered** — every gene x annotation x trait combination is here, so a query can ask for one gene in one trait regardless of significance. GeneBASS alone is ~343M rows, loaded from the ~4.5k per-trait files in `exome_results/genebass/gene_burden_per_trait/`; the other datasets come from their full `.munged.tsv.gz`. Clustering on `dataset, gene, trait` keeps single-gene lookups cheap despite the size.
+Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA2, BRaVa). **Unfiltered** — every gene x annotation x trait combination is here, so a query can ask for one gene in one trait regardless of significance. GeneBASS alone is ~343M rows, loaded from the ~4.5k per-trait files in `exome_results/genebass/gene_burden_per_trait/`; BRaVa likewise comes from per-trait files in `exome_results/brava/gene_burden_per_trait/`, one per phenocode with the ancestry stratum in the name (`AFib|EUR`); the other datasets come from their full `.munged.tsv.gz`. Clustering on `dataset, gene, trait` keeps single-gene lookups cheap despite the size.
 
 The tabix API is filtered differently: `/gene_based/{gene}` reads a combined mlog10p_burden > 4 file for GeneBASS (returning every trait of one gene unfiltered would be ~18k rows), while `/gene_based_results_by_phenotype/{resource}/{trait}` serves the same unfiltered per-trait files this table is loaded from. Data files are in `exome_results/` on GCS.
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| dataset | STRING | Yes | Source dataset (genebass, BipEx2, IBD_exome, SCHEMA2) |
+| dataset | STRING | Yes | Source dataset (genebass, BipEx2, IBD_exome, SCHEMA2) — mirrors `schemas/gene_burden_results.sql`'s column description, left stale by design rather than ALTERed against a live 343M-row table; BRaVa is a fifth value, see `gene_burden_results_v`'s `resource` CASE and `configs/datasets.yaml` for the live list |
 | trait | STRING | Yes | Trait identifier |
 | gene | STRING | Yes | Gene symbol |
 | gene_id | STRING | Yes | Ensembl gene ID |
@@ -542,7 +542,7 @@ LEFT JOIN phenotypes_v p USING (dataset, trait_original)
 WHERE cs.chr = 6 AND cs.pos BETWEEN 32000000 AND 33000000
 ```
 
-**Coverage is partial by design.** Only datasets that ship a phenotype metadata file have rows — FinnGen R14/R12/Kanta/drugs, the FinnGen+UKBB and FinnGen+MVP+UKBB meta-analyses, Open Targets, Genebass, COVID-19 HGI, IIBDGC, the Collins rCNV map and the EstBB-UKBB NMR traits. QTL datasets have none (their traits are genes, proteins and peaks, resolved via `gene_annotations` and `peak_to_gene`), and neither do datasets whose codes are already readable (PGC, GP2, BipEx2, SCHEMA2, IBD_exome). Use a `LEFT JOIN` when the dataset is not known in advance. Ranked fuzzy phenotype *search* stays on results-api; this table serves exact resolution and SQL-expressible filtering.
+**Coverage is partial by design.** Only datasets that ship a phenotype metadata file have rows — FinnGen R14/R12/Kanta/drugs, the FinnGen+UKBB and FinnGen+MVP+UKBB meta-analyses, Open Targets, Genebass, BRaVa, COVID-19 HGI, IIBDGC, the Collins rCNV map and the EstBB-UKBB NMR traits. QTL datasets have none (their traits are genes, proteins and peaks, resolved via `gene_annotations` and `peak_to_gene`), and neither do datasets whose codes are already readable (PGC, GP2, BipEx2, SCHEMA2, IBD_exome). Use a `LEFT JOIN` when the dataset is not known in advance. Ranked fuzzy phenotype *search* stays on results-api; this table serves exact resolution and SQL-expressible filtering.
 
 | Column | Type | Required | Description |
 |---|---|---|---|
@@ -954,6 +954,7 @@ genetics-results-db/
 │   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results, unfiltered per-trait files (truncates table)
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
+│   ├── load_brava_gene.sh           # Append BRaVa gene burden results, unfiltered per-trait files (deletes dataset='BRaVa' first, no truncate)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)
@@ -1066,6 +1067,25 @@ genetics-results-db/
    ./scripts/load_exome_variants_extra.sh
    ./scripts/load_gene_burden_extra.sh
    ```
+
+   BRaVa is appended by its own script, which is not tied to that ordering: it deletes the
+   `dataset = 'BRaVa'` rows before appending, so a rerun is idempotent and a dataset without
+   the GeneBASS load (the rehearsal dataset, via `DATASET_ID=genetics_results_brava_dev`) is
+   a valid target.
+   ```bash
+   GCS_BUCKET=daly-genetics-results GCS_PREFIX= DATASET_ID=genetics_results_brava_dev \
+     ./scripts/load_brava_gene.sh
+   ```
+   It loads `exome_results/brava/gene_burden_per_trait/*.tsv.gz` through one wildcard, then
+   checks the distinct trait count against the number of matched objects — the per-trait
+   object names carry the ancestry stratum (`AFib|EUR.tsv.gz`), so that check is what
+   establishes the wildcard reached the names containing `|`.
+
+   It is also one of the views `scripts/load_phenotypes.sh` depends on for the daly profile:
+   `build_phenotypes.BQ_DATASETS_BY_DATASET_ID['brava_gene_based']` names `BRaVa`, and the
+   registry cross-check fails for the whole profile while no results view carries that value.
+   Run `load_brava_gene.sh` before `load_phenotypes.sh` against the same BigQuery dataset on
+   daly.
 
 6. **Build and load the gene_annotations reference table** (manual, on-demand; full rebuild via `WRITE_TRUNCATE`):
    ```bash

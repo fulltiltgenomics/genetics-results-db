@@ -4,6 +4,7 @@ SELECT
   CASE
     WHEN LOWER(dataset) = 'genebass' THEN 'genebass'
     WHEN LOWER(dataset) = 'ibd_exome' THEN 'ibd_exome_2026'
+    WHEN LOWER(dataset) = 'brava' THEN 'brava'
     ELSE LOWER(dataset)
   END AS resource
 FROM `genetics_results.gene_burden_results`;

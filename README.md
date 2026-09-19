@@ -22,6 +22,8 @@ Cannot yet be used as is without access to restricted data.
 
 [scripts/load_gene_burden_extra.sh](scripts/load_gene_burden_extra.sh) appends additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
 
+[scripts/load_brava_gene.sh](scripts/load_brava_gene.sh) appends BRaVa gene burden results, unfiltered, from the per-trait files (deletes its own `dataset = 'BRaVa'` rows first, so it does not depend on the GeneBASS truncate)
+
 [scripts/load_asm_qtl.sh](scripts/load_asm_qtl.sh) loads ASM-QTL (allele-specific methylation) results
 
 [scripts/load_peak_to_gene.sh](scripts/load_peak_to_gene.sh) loads Open4Gene peak-to-gene links (truncates `peak_to_gene`), which join peak-keyed caQTL credible sets to genes
@@ -193,7 +195,7 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 - **colocalization** — colocalization analysis results between datasets
 - **coloc_credsets** — variants in colocalized credible sets
 - **exome_variant_results** — exome variant associations (Genebass, IBD exome)
-- **gene_burden_results** — gene burden test results, unfiltered (Genebass, BipEx2, IBD exome, SCHEMA2)
+- **gene_burden_results** — gene burden test results, unfiltered (Genebass, BipEx2, IBD exome, SCHEMA2, BRaVa)
 - **asm_qtl** — allele-specific methylation QTL results (deCODE)
 - **gene_annotations** — whole-universe gene reference table (HGNC + GENCODE, gene-group lineage)
 - **open_chromatin** — atlas of accessible/active chromatin regions by cell type/tissue/condition

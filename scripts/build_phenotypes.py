@@ -101,6 +101,7 @@ BQ_DATASETS_BY_DATASET_ID = {
     "genebass_gene_based": ["genebass"],
     "bipex_gene_based": ["BipEx2"],
     "schema_gene_based": ["SCHEMA2"],
+    "brava_gene_based": ["BRaVa"],
     "ibd_exome": ["IBD_exome"],
     "ibd_gene_based": ["IBD_exome"],
     "decode_asmqtl_cpg": ["deCODE_asmQTL_CpG"],
@@ -289,6 +290,37 @@ def _quantitative_pheweb(items, entry):
     } for item in items]
 
 
+def _pheweb(items, entry):
+    """A pheweb-shaped JSON mixing binary and quantitative traits in one file (BRaVa).
+
+    trait_type comes from which sample-size keys an item carries, not from `category`:
+    here `category` holds the Sex stratum ("Both"/"Female"), so the
+    `category.startswith("Quantitative")` rule `_finngen_kanta` uses would call every trait
+    binary, and `_quantitative_pheweb` would null the binary traits' case counts.
+    Phenocodes are taken verbatim, ancestry strata included ("AFib|EUR").
+
+    Kept in step with genetics-results-api's `pheweb` harmonizer; see the module docstring.
+    """
+    rows = []
+    for item in items:
+        binary = "num_cases" in item or "num_controls" in item
+        n_cases = safe_int(item.get("num_cases")) if binary else None
+        n_controls = safe_int(item.get("num_controls")) if binary else None
+        n_samples = safe_int(item.get("num_samples"))
+        if n_samples is None and n_cases is not None:
+            n_samples = n_cases + (n_controls or 0)
+        rows.append({
+            "trait": item.get("phenocode") or "",
+            "trait_name": item.get("phenostring") or None,
+            "trait_type": "binary" if binary else "quantitative",
+            "category": item.get("category") or None,
+            "n_cases": n_cases,
+            "n_controls": n_controls,
+            "n_samples": n_samples,
+        })
+    return rows
+
+
 def _open_targets(items, entry):
     rows = []
     for item in items:
@@ -354,6 +386,7 @@ _PHENOTYPE_HARMONIZERS = {
     "finngen_kanta": _finngen_kanta,
     "finngen_drugs": _finngen_drugs,
     "quantitative_pheweb": _quantitative_pheweb,
+    "pheweb": _pheweb,
     "open_targets": _open_targets,
     "genebass": _genebass,
 }
