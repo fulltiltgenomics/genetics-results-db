@@ -44,7 +44,7 @@ if ! gsutil -q stat "${GCS_URI}" 2>/dev/null; then
 fi
 
 ts "Loading ${GCS_URI}..."
-python3 "${SCRIPT_DIR}/load_data.py" \
+"$PY" "${SCRIPT_DIR}/load_data.py" \
   --project "${PROJECT_ID}" \
   --dataset "${DATASET_ID}" \
   --table rcnv_window_associations \

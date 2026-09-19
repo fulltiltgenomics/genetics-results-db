@@ -25,7 +25,7 @@ ts "Loading data into ${PROJECT_ID}.${DATASET_ID}"
 # Load a single GCS file into a table with the given write disposition.
 load_one() {
   local table="$1" gcs_uri="$2" disposition="$3"
-  python3 "${SCRIPT_DIR}/load_data.py" \
+  "$PY" "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table "${table}" \

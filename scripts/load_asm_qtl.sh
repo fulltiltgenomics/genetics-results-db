@@ -37,7 +37,7 @@ for entry in "${ASM_QTL_FILES[@]}"; do
   else
     disposition="WRITE_APPEND"
   fi
-  python3 "${SCRIPT_DIR}/load_data.py" \
+  "$PY" "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table asm_qtl \

@@ -8,6 +8,8 @@ Cannot yet be used as is without access to restricted data.
 
 ## Loading data to BigQuery
 
+The loaders run the Python helpers through the interpreter `scripts/lib/common.sh` resolves — `$PYTHON` if set, else `.venv/bin/python` (`uv sync`), else `python3` — and abort at startup, before any DELETE or TRUNCATE, if it cannot import `google-cloud-bigquery`.
+
 [scripts/setup_bigquery.sh](scripts/setup_bigquery.sh) creates the BigQuery dataset and tables. It must run before the loaders: `scripts/load_data.py` inserts into the tables it made from `schemas/*.sql` and refuses to create one, since a loader-created table would carry neither the NOT NULL modes nor the column descriptions.
 
 [scripts/load_credsets_coloc.sh](scripts/load_credsets_coloc.sh) loads credible sets and colocalization results

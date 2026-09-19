@@ -27,7 +27,7 @@ if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
 fi
 
 ts "=== Loading variant annotations from ${gcs_uri} ==="
-python3 "${SCRIPT_DIR}/load_data.py" \
+"$PY" "${SCRIPT_DIR}/load_data.py" \
   --project "${PROJECT_ID}" \
   --dataset "${DATASET_ID}" \
   --table variant_annotation \

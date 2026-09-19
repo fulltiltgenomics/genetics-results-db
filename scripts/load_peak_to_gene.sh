@@ -39,7 +39,7 @@ fi
 echo ""
 ts "=== Loading peak-to-gene links ==="
 ts "Loading ${gcs_uri} (dataset=${dataset_id})..."
-python3 "${SCRIPT_DIR}/load_data.py" \
+"$PY" "${SCRIPT_DIR}/load_data.py" \
   --project "${PROJECT_ID}" \
   --dataset "${DATASET_ID}" \
   --table peak_to_gene \

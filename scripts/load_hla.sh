@@ -56,7 +56,7 @@ for dataset_id in "${HLA_FILES[@]}"; do
     disposition="WRITE_APPEND"
   fi
   # dataset column is absent from the file — inject it here (see header note)
-  python3 "${SCRIPT_DIR}/load_data.py" \
+  "$PY" "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table hla_associations \

@@ -1019,15 +1019,18 @@ genetics-results-db/
   `../genetics-results-suite/scripts/sync-datasets.sh`, or set `DATASETS_CONFIG_PATH`.
   `api/main.py` raises at import without it, so the API and the test suite both fail to
   start on a fresh clone.
-- **The project virtualenv must be activated** before running any `scripts/load_*.sh`.
-  The loaders invoke bare `python3`, which resolves to the system interpreter — that
-  one has no `google-cloud-bigquery` and the load dies with
-  `ModuleNotFoundError: No module named 'google'`:
-  ```bash
-  source .venv/bin/activate      # create/refresh with: uv sync
-  ```
-  (Not needed inside the container: `Dockerfile` installs dependencies with
-  `uv pip install --system`, so there is no `.venv` there.)
+- **A Python interpreter with `google-cloud-bigquery`.** `scripts/lib/common.sh`, which
+  every `scripts/load_*.sh` sources, resolves one into `$PY` — `$PYTHON` if set, else
+  `.venv/bin/python`, else `python3` — and every helper is invoked through it, so no
+  activation is needed. Create the venv with `uv sync`, or point `PYTHON` at another
+  interpreter. Inside the container neither applies: `Dockerfile` installs dependencies
+  with `uv pip install --system`, so there is no `.venv` and bare `python3` has them.
+
+  The import is probed at source time and the loader aborts before doing anything. That
+  ordering is the point: `load_brava_gene.sh` DELETEs its own rows and
+  `load_genebass_gene.sh` TRUNCATEs before their first python call, so an interpreter
+  that only fails when it is finally used has already destroyed the data it failed to
+  reload.
 
 ### Setup Steps
 

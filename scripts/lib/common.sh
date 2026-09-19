@@ -8,6 +8,28 @@
 # SCRIPT_DIR is deliberately not set here: inside a sourced file ${BASH_SOURCE[0]} names
 # this file rather than the caller, and the caller needs the value before it can find us.
 
+# Interpreter for the Python helpers under scripts/. Only the repo's .venv is guaranteed to
+# carry google-cloud-bigquery, so a bare `python3` is whatever the machine happens to have.
+PY="${PYTHON:-}"
+if [ -z "${PY}" ]; then
+  if [ -x "${SCRIPT_DIR}/../.venv/bin/python" ]; then
+    PY="${SCRIPT_DIR}/../.venv/bin/python"
+  else
+    PY="python3"
+  fi
+fi
+
+# Probed here, at source time, rather than left to the first python call: several loaders
+# mutate the table before that point (load_brava_gene.sh DELETEs its dataset's rows,
+# load_genebass_gene.sh TRUNCATEs, load_phenotypes.sh rebuilds), so an unusable interpreter
+# discovered late destroys data and then fails.
+if ! "${PY}" -c 'import google.cloud.bigquery' >/dev/null 2>&1; then
+  echo "common.sh: ${PY} cannot import google.cloud.bigquery." >&2
+  echo "  Run 'uv sync' in $(cd "${SCRIPT_DIR}/.." && pwd) to create the .venv," >&2
+  echo "  or set PYTHON=/path/to/python to an interpreter that has it." >&2
+  exit 1
+fi
+
 ts() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }

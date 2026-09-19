@@ -27,7 +27,7 @@ STAGING_URI="${STAGING_URI:-gs://${GCS_BUCKET}/${GCS_PREFIX}gene_annotations.ndj
 BASE="gs://${GCS_BUCKET}/${GCS_PREFIX}"
 
 ts "Building gene_annotations NDJSON -> ${STAGING_URI}"
-python3 "${SCRIPT_DIR}/build_gene_annotations.py" \
+"$PY" "${SCRIPT_DIR}/build_gene_annotations.py" \
   --hgnc "${BASE}hgnc_complete_set.txt" \
   --gencode "${BASE}gencode.v${GENCODE_VERSION}.annotation.genes.tsv" \
   --gene-has-family "${BASE}hgnc_gene_has_family.csv" \
@@ -38,7 +38,7 @@ python3 "${SCRIPT_DIR}/build_gene_annotations.py" \
   --hgnc-version "${HGNC_VERSION}"
 
 ts "Loading ${STAGING_URI} into ${PROJECT_ID}.${DATASET_ID}.gene_annotations (WRITE_TRUNCATE)"
-python3 "${SCRIPT_DIR}/load_data.py" \
+"$PY" "${SCRIPT_DIR}/load_data.py" \
   --project "${PROJECT_ID}" \
   --dataset "${DATASET_ID}" \
   --table gene_annotations \

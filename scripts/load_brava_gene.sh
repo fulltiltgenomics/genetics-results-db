@@ -64,7 +64,7 @@ ts "Done"
 echo ""
 ts "=== Appending BRaVa gene burden results ==="
 ts "Loading ${BRAVA_GENE_URI}..."
-python3 "${SCRIPT_DIR}/load_data.py" \
+"$PY" "${SCRIPT_DIR}/load_data.py" \
   --project "${PROJECT_ID}" \
   --dataset "${DATASET_ID}" \
   --table gene_burden_results \

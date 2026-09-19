@@ -28,7 +28,7 @@ for gcs_uri in "${EXOME_VARIANT_FILES[@]}"; do
     exit 1
   fi
   ts "Loading ${gcs_uri}..."
-  python3 "${SCRIPT_DIR}/load_data.py" \
+  "$PY" "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table exome_variant_results \

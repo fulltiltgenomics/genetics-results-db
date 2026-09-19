@@ -58,7 +58,7 @@ dataset_columns=$(bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false -
   FROM \`${PROJECT_ID}.${DATASET_ID}.INFORMATION_SCHEMA.COLUMNS\`
   WHERE column_name IN ('dataset', 'dataset1', 'dataset2')" 2>/dev/null) || dataset_columns=""
 
-live_sql=$(printf '%s' "${dataset_columns}" | python3 "${SCRIPT_DIR}/live_dataset_scope.py" \
+live_sql=$(printf '%s' "${dataset_columns}" | "$PY" "${SCRIPT_DIR}/live_dataset_scope.py" \
   --datasets-yaml "${DATASETS_YAML}" \
   --project-id "${PROJECT_ID}" --dataset-id "${DATASET_ID}") || live_sql=""
 
@@ -93,7 +93,7 @@ build_args=()
 if [ "${ALLOW_UNVALIDATED:-0}" = "1" ]; then
   build_args+=(--allow-unvalidated)
 fi
-python3 "${SCRIPT_DIR}/build_phenotypes.py" \
+"$PY" "${SCRIPT_DIR}/build_phenotypes.py" \
   --datasets-yaml "${DATASETS_YAML}" \
   --profile "${PROFILE}" \
   --phenotypes-out "${PHENOTYPES_URI}" \
@@ -108,7 +108,7 @@ for table in phenotypes datasets; do
   esac
   echo ""
   ts "=== Loading ${table} ==="
-  python3 "${SCRIPT_DIR}/load_data.py" \
+  "$PY" "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table "${table}" \

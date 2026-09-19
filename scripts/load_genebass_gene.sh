@@ -39,7 +39,7 @@ for gcs_uri in "${GENEBASS_GENE_FILES[@]}"; do
     exit 1
   fi
   ts "Loading ${gcs_uri}..."
-  python3 "${SCRIPT_DIR}/load_data.py" \
+  "$PY" "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \
     --dataset "${DATASET_ID}" \
     --table gene_burden_results \
