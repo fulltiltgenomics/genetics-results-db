@@ -106,6 +106,7 @@ BQ_DATASETS_BY_DATASET_ID = {
     "ibd_gene_based": ["IBD_exome"],
     "decode_asmqtl_cpg": ["deCODE_asmQTL_CpG"],
     "decode_asmqtl_mds": ["deCODE_asmQTL_MDS"],
+    "decode_pqtl_2021": ["deCODE_pQTL_2021"],
     "marderstein_open_chromatin": ["marderstein_open_chromatin"],
     "li_brain_open_chromatin": ["li_brain_open_chromatin"],
     "catlas_open_chromatin": ["catlas_open_chromatin"],
@@ -146,6 +147,8 @@ ABSENT_FROM_RESULTS = {
     "QTD000869": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000910": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000915": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
+    # loaded by load_pseudo.sh from finngen-commons; the daly bucket has no copy
+    "deCODE_pQTL_2021": (("daly",), "deCODE pQTL pseudo credible sets are loaded in the finngen deployment only"),
 }
 
 
