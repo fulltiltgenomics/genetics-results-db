@@ -147,8 +147,6 @@ ABSENT_FROM_RESULTS = {
     "QTD000869": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000910": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000915": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
-    # loaded by load_pseudo.sh from finngen-commons; the daly bucket has no copy
-    "deCODE_pQTL_2021": (("daly",), "deCODE pQTL pseudo credible sets are loaded in the finngen deployment only"),
 }
 
 
