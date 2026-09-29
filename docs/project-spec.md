@@ -38,6 +38,12 @@ BigQuery Dataset
   │   └── exome_variant_results_v (view: adds variant, resource columns)
   ├── gene_burden_results (partitioned by chr, clustered by dataset, gene, trait)
   │   └── gene_burden_results_v (view: adds resource column)
+  ├── exome_gene_counts (partitioned by chr, clustered by dataset, gene, trait)
+  │   └── exome_gene_counts_v (view: adds resource column)
+  ├── exome_gene_bayes_results (partitioned by chr, clustered by dataset, gene, trait)
+  │   └── exome_gene_bayes_results_v (view: adds resource column)
+  ├── exome_variant_counts (partitioned by chr, clustered by dataset, gene, trait)
+  │   └── exome_variant_counts_v (view: adds variant, resource columns)
   ├── asm_qtl (partitioned by chr, clustered by dataset, gene_most_severe, most_severe)
   │   └── asm_qtl_v (view: adds variant, maf, resource columns)
   ├── gene_annotations (unpartitioned reference table, clustered by symbol)
@@ -230,6 +236,16 @@ The tabix API is filtered differently: `/gene_based/{gene}` reads a combined mlo
 | n_controls | INT64 | No | Number of controls (NULL for quantitative traits) |
 | trait_original | STRING | Yes | Original trait name in the respective dataset |
 | flags | STRING | No | Quality or analysis flags (NA if none) |
+
+### exome_gene_counts, exome_gene_bayes_results, exome_variant_counts
+
+The count-based exome family: studies whose release carries per-gene and per-variant **counts** and a Bayesian gene statistic, but no p-value, effect size or allele frequency. First and so far only source: the Autism Sequencing Consortium 2026 release (`dataset = 'ASC2'`, one trait `ASD`). They are separate from `gene_burden_results` / `exome_variant_results` because those require `mlog10p` and `beta`, and deriving either from counts would present a statistic the study never reported — nothing in these three tables is computed on the way in; the munge passes every value through as spelled.
+
+- `exome_gene_counts` — LONG, one row per (dataset, trait, gene_id, variant_class, inheritance_mode): 7 classes (PTV, Mis2, Mis1, Mis0, synonymous, DEL, DUP) x 3 modes (de_novo, inherited, case_control), with `n_affected` / `n_unaffected` as the pair the mode contrasts (proband/sibling, transmitted/untransmitted, case/control). Every gene has all 21 rows, zeros included. These are the source's "independent" counts and are not sums over `exome_variant_counts`.
+- `exome_gene_bayes_results` — one row per (dataset, trait, gene_id): `bayes_factor`, `fdr`, `qc_flagged`. **Rank on `fdr`**: the Bayesian FDR is the running mean of (1 - PPA) down the BF-ranked list, so it is not a function of `bayes_factor` alone. The four `qc_flagged` genes are kept, flagged.
+- `exome_variant_counts` — one row per variant (7,045,130 for ASC2, chrX and chrY included, no CNVs), with the six source count columns under their source names plus consequence, class, MPC, AlphaMissense and gnomAD AF annotations. Not filtered on anything.
+
+Column lists: `schemas/exome_gene_counts.sql`, `schemas/exome_gene_bayes_results.sql`, `schemas/exome_variant_counts.sql`; the loader's `SCHEMAS` entries in `scripts/load_data.py` must match the column order `genetics-results-munge/scripts/munge_asc.py` writes, and the null marker is `NA`. All three are partitioned by `chr` and clustered on `dataset, gene, trait` like the burden tables. `scripts/load_asc.sh` deletes `dataset = 'ASC2'` from each and appends, so it is idempotent and independent of the Genebass truncate; it must run before `load_phenotypes.sh` on a profile where the `asc_gene_based` / `asc_exome` registry entries are not listed in `ABSENT_FROM_RESULTS`.
 
 ### asm_qtl
 
@@ -915,6 +931,12 @@ genetics-results-db/
 │   ├── exome_variant_results_v.sql    # View with variant and resource columns
 │   ├── gene_burden_results.sql        # GeneBASS gene burden results table
 │   ├── gene_burden_results_v.sql      # View with resource column
+│   ├── exome_gene_counts.sql          # Count-based exome studies: per-gene counts by variant class x inheritance mode (ASC2)
+│   ├── exome_gene_counts_v.sql        # View with resource column
+│   ├── exome_gene_bayes_results.sql   # Count-based exome studies: per-gene Bayes factor and Bayesian FDR (ASC2)
+│   ├── exome_gene_bayes_results_v.sql # View with resource column
+│   ├── exome_variant_counts.sql       # Count-based exome studies: per-variant allele counts by inheritance mode (ASC2)
+│   ├── exome_variant_counts_v.sql     # View with variant and resource columns
 │   ├── asm_qtl.sql                    # deCODE allele-specific methylation QTL table
 │   ├── asm_qtl_v.sql                  # View with variant, maf and resource columns
 │   ├── gene_annotations.sql           # Whole-universe gene annotations table (HGNC + GENCODE)
@@ -955,6 +977,7 @@ genetics-results-db/
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
 │   ├── load_brava_gene.sh           # Append BRaVa gene burden results, unfiltered per-trait files (deletes dataset='BRaVa' first, no truncate)
+│   ├── load_asc.sh                  # Load the ASC 2026 autism exome release into the three count-based tables (deletes dataset='ASC2' first); run before load_phenotypes.sh
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)

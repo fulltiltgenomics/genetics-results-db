@@ -26,6 +26,8 @@ The loaders run the Python helpers through the interpreter `scripts/lib/common.s
 
 [scripts/load_brava_gene.sh](scripts/load_brava_gene.sh) appends BRaVa gene burden results, unfiltered, from the per-trait files (deletes its own `dataset = 'BRaVa'` rows first, so it does not depend on the GeneBASS truncate)
 
+[scripts/load_asc.sh](scripts/load_asc.sh) loads the ASC 2026 autism exome release into `exome_gene_counts`, `exome_gene_bayes_results` and `exome_variant_counts` (deletes its own `dataset = 'ASC2'` rows from each first, then appends; run before `load_phenotypes.sh`)
+
 [scripts/load_asm_qtl.sh](scripts/load_asm_qtl.sh) loads ASM-QTL (allele-specific methylation) results
 
 [scripts/load_peak_to_gene.sh](scripts/load_peak_to_gene.sh) loads Open4Gene peak-to-gene links (truncates `peak_to_gene`), which join peak-keyed caQTL credible sets to genes
