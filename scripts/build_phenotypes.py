@@ -18,12 +18,11 @@ Two outputs:
 * `datasets` - one row per results-view `dataset` value, plus a NULL-`dataset` row for each
   registry entry with no BigQuery presence (served only by results-api).
 
-The registry key -> results-view `dataset` value mapping (BQ_DATASETS_BY_DATASET_ID below)
-is NOT derivable from any config: the `dataset` column is baked into the source credible-set
-TSVs by genetics-results-munge, and datasets.yaml never records it. It is therefore
-maintained here explicitly and cross-checked against the live tables by --validate-against
-(scripts/load_phenotypes.sh passes it). Any drift - in either direction - fails the build
-rather than silently producing a table that never joins.
+The registry key -> results-view `dataset` value link is each entry's `dataset` field in
+datasets.yaml (see results_view_datasets below): the label is baked into the source TSVs by
+genetics-results-munge, so the registry records it rather than deriving it. It is cross-checked
+against the live tables by --validate-against (scripts/load_phenotypes.sh passes it). Any drift
+- in either direction - fails the build rather than silently producing a table that never joins.
 
 The harmonization below mirrors genetics-results-api's MetadataHarmonizer
 (app/services/metadata_harmonizer.py). It is duplicated rather than imported because the two
@@ -43,81 +42,21 @@ from collections import defaultdict
 import fsspec
 import yaml
 
-# results-view `dataset` values for each datasets.yaml registry key. The relation is
-# many-to-many in both directions, which is exactly why neither `resource` nor the registry
-# key is usable as the join key:
-#   - several registry entries share one results-view dataset (pgc_scz + pgc_bip -> "PGC",
-#     genebass_exome + genebass_gene_based -> "genebass", ibd_exome + ibd_gene_based)
-#   - one registry entry appears under two names across tables (finngen_pqtl is
-#     "FinnGen_Olink" in credible_sets but "FinnGen_Olink_3K" in colocalization)
-# Entries absent from this map have no BigQuery presence (summary-stats-only pQTL
-# meta-analyses, expression, chromatin peaks, gene-disease); they still get a `datasets`
-# row, with dataset = NULL.
-BQ_DATASETS_BY_DATASET_ID = {
-    "finngen_gwas": ["FinnGen_R14"],
-    # hla_associations spells its trait column `phenotype`, and its values ARE the R14
-    # endpoint codes (all 2,712 distinct ones join FinnGen_R14 phenotypes). It still gets its
-    # own phenotype rows rather than borrowing FinnGen_R14's, because `datasets` has a row for
-    # finngen_hla and the documented, tool-advertised join is
-    #   p.dataset = <the results view's dataset> AND p.trait_original = <code>.
-    # Without finngen_hla rows that join returns ZERO ROWS SILENTLY for the one dataset this
-    # whole cross-check exists to fix, and resolving HLA trait names would instead require an
-    # agent to know out of band that finngen_hla is secretly R14 - a special case with no
-    # discoverable signal anywhere in the schema. (FinnGen_R12 likewise duplicates 2,315 of
-    # R14's codes, so per-dataset duplication is already the table's normal shape.)
-    "finngen_hla": ["finngen_hla"],
-    "finngen_gwas_r12": ["FinnGen_R12"],
-    "finngen_kanta": ["FinnGen_kanta"],
-    # the R12 Kanta fine-mapping shares the results-view name with the current R14 Kanta
-    # release (it is only reachable as the caQTL/eQTL coloc partner). The two phenocode
-    # spaces are disjoint - R12 uses bare OMOP ids ("3000963"), R14 uses
-    # "median_3000963_age_adjusted_IRN" - so the union stays unique on (dataset, phenocode).
-    "finngen_kanta_r12": ["FinnGen_kanta"],
-    "finngen_drugs": ["FinnGen_drugs"],
-    "finngen_mvp_ukbb": ["FinnGen_R13_MVP_UKBB"],
-    "finngen_mvp_ukbb_labs": ["FinnGen_R13_MVP_UKBB_labs"],
-    "finngen_ukbb": ["FinnGen_R13_UKBB"],
-    "finngen_ukbb_labs": ["FinnGen_R13_UKBB_labs"],
-    "finngen_eqtl": ["FinnGen_snRNAseq"],
-    "finngen_caqtl": ["FinnGen_ATACseq"],
-    "finngen_pqtl": ["FinnGen_Olink", "FinnGen_Olink_3K"],
-    "finngen_pqtl_5k": ["FinnGen_Olink_5K"],
-    "finngen_nmr": ["FinnGen_NMR"],
-    "finngen_somascan": ["FinnGen_SomaScan"],
-    "finnliver": ["FinnLiver"],
-    "generisk": ["GeneRisk"],
-    "interval": ["INTERVAL"],
-    "ukbb_pqtl": ["UKB_PPP"],
-    "ukbb_finucane": ["UKB_Finucane"],
-    "covid_hgi": ["COVID19_HGI"],
-    "ibd_gwas": ["IIBDGC"],
-    "gp2_pd": ["GP2"],
-    "pgc_scz": ["PGC"],
-    "pgc_bip": ["PGC"],
-    "pgc_scz_finemap": ["PGC_SCZ_2022"],
-    "nmr_ukbb_est": ["nmr_ukbb_est"],
-    "open_targets": ["Open_Targets_26.06"],
-    "genebass_exome": ["genebass"],
-    "genebass_gene_based": ["genebass"],
-    "bipex_gene_based": ["BipEx2"],
-    "schema_gene_based": ["SCHEMA2"],
-    "brava_gene_based": ["BRaVa"],
-    "ibd_exome": ["IBD_exome"],
-    "ibd_gene_based": ["IBD_exome"],
-    "decode_asmqtl_cpg": ["deCODE_asmQTL_CpG"],
-    "decode_asmqtl_mds": ["deCODE_asmQTL_MDS"],
-    "decode_pqtl_2021": ["deCODE_pQTL_2021"],
-    "marderstein_open_chromatin": ["marderstein_open_chromatin"],
-    "li_brain_open_chromatin": ["li_brain_open_chromatin"],
-    "catlas_open_chromatin": ["catlas_open_chromatin"],
-    "epimap_open_chromatin": ["epimap_open_chromatin"],
-    "calderon_open_chromatin": ["calderon_open_chromatin"],
-    "rosmap_open_chromatin": ["rosmap_open_chromatin"],
-    "marderstein_chrombpnet": ["marderstein_chrombpnet"],
-    "marderstein_flare": ["marderstein_flare"],
-    "siraj_mpra": ["siraj_mpra"],
-    "collins_rcnv_2022": ["Collins_rCNV_2022"],
-}
+def results_view_datasets(entry):
+    """The results-view `dataset` values a registry entry appears under.
+
+    Read from the entry's `dataset` field in datasets.yaml: a string, or a list where one
+    entry appears under two labels across views (finngen_pqtl is "FinnGen_Olink" in
+    credible_sets but "FinnGen_Olink_3K" in colocalization). Several entries may share one
+    label (pgc_scz + pgc_bip -> "PGC", the two Genebass products -> "genebass"), so neither
+    the registry key nor `resource` can be the join key. No field means no results-view
+    presence: the entry still gets a `datasets` row, with dataset = NULL.
+    """
+    value = entry.get("dataset")
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
+
 
 # results-view `dataset` names the registry claims but that NO results view actually
 # contains (checked live against every view api/main.py exposes that carries a `dataset`
@@ -138,6 +77,11 @@ BQ_DATASETS_BY_DATASET_ID = {
 ALL_PROFILES = None
 
 ABSENT_FROM_RESULTS = {
+    # expression labels: the registry records them because results-api resolves its
+    # expression files' `dataset` column through the same field, but no results view
+    # carries expression
+    "GTEx_v10": (ALL_PROFILES, "expression is served by results-api only"),
+    "HPA_24.1": (ALL_PROFILES, "expression is served by results-api only"),
     # eQTL Catalogue sub-studies present in the collection metadata whose fine-mapping is not
     # part of the imported release; the other ~840 QTD ids are live. Not profile-scoped:
     # validate() errors when a listed name IS live, and it does not for these.
@@ -412,7 +356,7 @@ def build_phenotypes(registry, metadata_by_dataset_id, absent):
             continue
         partner_only = dataset_id in COLOC_PARTNER_ONLY_DATASET_IDS
         harmonized = harmonizer(items, entry)
-        for dataset in BQ_DATASETS_BY_DATASET_ID.get(dataset_id, []):
+        for dataset in results_view_datasets(entry):
             if dataset in absent:
                 continue  # a phenotype row keyed on a dataset no results view has joins nothing
             for row in harmonized:
@@ -514,10 +458,7 @@ def build_datasets(registry, resources, metadata_by_dataset_id, absent):
             "collection": bool(entry.get("collection", False)),
             "subdataset_of": None,
         }
-        names = [
-            name for name in BQ_DATASETS_BY_DATASET_ID.get(dataset_id, [])
-            if name not in absent
-        ] or [None]
+        names = [name for name in results_view_datasets(entry) if name not in absent] or [None]
         for name in names:
             _emit({**base, "dataset": name, "dataset_ids": list(base["dataset_ids"])})
 

@@ -6,16 +6,18 @@ Uses tiny in-repo fixtures; does not touch GCS or BigQuery.
 import os
 import sys
 
+import yaml
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from build_phenotypes import (  # noqa: E402
     ABSENT_FROM_RESULTS,
-    BQ_DATASETS_BY_DATASET_ID,
     COLOC_PARTNER_ONLY_DATASET_IDS,
     absent_from_results,
     build_datasets,
     build_phenotypes,
     parse_date,
+    results_view_datasets,
     safe_int,
     validate,
 )
@@ -34,34 +36,40 @@ RESOURCES = {
 
 REGISTRY = {
     "finngen_gwas": {
+        "dataset": "FinnGen_R14",
         "resource": "finngen", "version": "R14", "description": "core GWAS",
         "author": "FinnGen Consortium", "publication_date": "2026-05-13",
         "data_type": "gwas", "trait_type": "binary",
         "metadata_file": "gs://x/r14.json", "metadata_harmonizer": "finngen_r13",
     },
     "finngen_kanta": {
+        "dataset": "FinnGen_kanta",
         "resource": "finngen", "version": "R14", "description": "kanta labs",
         "author": "FinnGen Consortium", "publication_date": "2026-05-29",
         "data_type": "gwas", "trait_type": "mixed",
         "metadata_file": "gs://x/kanta_r14.json", "metadata_harmonizer": "finngen_kanta",
     },
     "finngen_kanta_r12": {
+        "dataset": "FinnGen_kanta",
         "resource": "finngen", "version": "R12", "description": "kanta labs R12",
         "author": "FinnGen Consortium", "publication_date": "2025-03-10",
         "data_type": "gwas", "trait_type": "mixed",
         "metadata_file": "gs://x/kanta_r12.json", "metadata_harmonizer": "finngen_kanta",
     },
     "pgc_scz": {
+        "dataset": "PGC",
         "resource": "pgc", "version": "2022", "description": "SCZ",
         "author": "PGC", "publication_date": "2022-04-08", "data_type": "gwas",
         "metadata_file": None, "metadata_harmonizer": None,
     },
     "pgc_bip": {
+        "dataset": "PGC",
         "resource": "pgc", "version": "2021", "description": "BIP",
         "author": "PGC", "publication_date": "2021-05-17", "data_type": "gwas",
         "metadata_file": None, "metadata_harmonizer": None,
     },
     "brava_gene_based": {
+        "dataset": "BRaVa",
         "resource": "brava", "version": "2026", "description": "BRaVa gene burden",
         "author": "BRaVa", "publication_date": "2026-05-24",
         "data_type": "gene_based", "trait_type": "mixed",
@@ -74,8 +82,10 @@ REGISTRY = {
         "metadata_file": "gs://x/eqtl.tsv", "metadata_harmonizer": "eqtl_catalogue",
         "collection": True, "subdataset_id_field": "phenotype_code",
     },
-    # registry entry with no BigQuery presence
+    # carries a label for results-api's expression files, but ABSENT_FROM_RESULTS keeps it
+    # out of the results views, so it lands as a NULL-dataset row
     "gtex_expression": {
+        "dataset": "GTEx_v10",
         "resource": "gtex", "version": "v8", "description": "expression",
         "author": "GTEx", "publication_date": "2020-09-11", "data_type": "expression",
         "metadata_file": None, "metadata_harmonizer": None,
@@ -272,8 +282,19 @@ def test_absent_datasets_are_emitted_with_a_null_dataset_and_no_phenotypes():
 def test_every_coloc_partner_only_dataset_is_mapped():
     """A coloc partner with no results-view dataset would produce unresolvable
     colocalization rows, which is the whole reason these entries are kept."""
-    for dataset_id in COLOC_PARTNER_ONLY_DATASET_IDS:
-        assert BQ_DATASETS_BY_DATASET_ID.get(dataset_id)
+    path = os.path.join(os.path.dirname(__file__), "..", "configs", "datasets.yaml")
+    with open(path) as handle:
+        profiles = yaml.safe_load(handle)["profiles"]
+    for profile in profiles.values():
+        for dataset_id in COLOC_PARTNER_ONLY_DATASET_IDS:
+            assert results_view_datasets(profile["datasets"][dataset_id])
+
+
+def test_results_view_datasets_reads_a_string_a_list_or_nothing():
+    assert results_view_datasets({"dataset": "FinnGen_R14"}) == ["FinnGen_R14"]
+    assert results_view_datasets({"dataset": ["FinnGen_Olink", "FinnGen_Olink_3K"]}) == [
+        "FinnGen_Olink", "FinnGen_Olink_3K"]
+    assert results_view_datasets({}) == []
 
 
 def test_pheweb_derives_trait_type_from_the_sample_size_keys_not_category():

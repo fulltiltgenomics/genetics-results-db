@@ -2,8 +2,8 @@
 """Generate the SQL that collects every `dataset` value the results views actually contain.
 
 scripts/load_phenotypes.sh feeds the result to build_phenotypes.py --validate-against, which
-cross-checks it against BQ_DATASETS_BY_DATASET_ID - a registry key -> results-view `dataset`
-mapping that exists in no config and is hand-maintained.
+cross-checks it against the `dataset` field of every datasets.yaml registry entry - the
+results-view label the munge pipeline baked into that entry's files.
 
 Why this is generated rather than written out: the previous version of the cross-check listed
 nine table names by hand. A brand-new table therefore contributed nothing to the live set, so

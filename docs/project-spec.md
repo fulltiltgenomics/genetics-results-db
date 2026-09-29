@@ -444,7 +444,7 @@ Unpartitioned — there is no chromosome column to `RANGE_BUCKET` on — and clu
 
 Column list: `schemas/rcnv_gene_associations.sql` (23 columns; the loader's `SCHEMAS["rcnv_gene_associations"]` in `scripts/load_data.py` must match the staged TSV's column order, and the null marker is `NA`).
 
-`rcnv_gene_associations_v` derives `resource` from the `Collins_rCNV%` rule the way the other product views do, and LEFT JOINs `dosage_sensitivity` on `ensembl_gene_id` so `phaplo`/`ptriplo`/`haploinsufficient`/`triplosensitive` ride on every association row. It is the one view whose base table must be loaded *before* `scripts/load_phenotypes.sh` runs: `build_phenotypes.BQ_DATASETS_BY_DATASET_ID['collins_rcnv_2022']` names `Collins_rCNV_2022`, and the registry cross-check fails for the whole profile while no results view carries that value.
+`rcnv_gene_associations_v` derives `resource` from the `Collins_rCNV%` rule the way the other product views do, and LEFT JOINs `dosage_sensitivity` on `ensembl_gene_id` so `phaplo`/`ptriplo`/`haploinsufficient`/`triplosensitive` ride on every association row. It is the one view whose base table must be loaded *before* `scripts/load_phenotypes.sh` runs: the `collins_rcnv_2022` registry entry's `dataset` field names `Collins_rCNV_2022`, and the registry cross-check fails for the whole profile while no results view carries that value.
 
 ### rcnv_segments
 
@@ -1085,7 +1085,7 @@ genetics-results-db/
    establishes the wildcard reached the names containing `|`.
 
    It is also one of the views `scripts/load_phenotypes.sh` depends on for the daly profile:
-   `build_phenotypes.BQ_DATASETS_BY_DATASET_ID['brava_gene_based']` names `BRaVa`, and the
+   the `brava_gene_based` registry entry's `dataset` field names `BRaVa`, and the
    registry cross-check fails for the whole profile while no results view carries that value.
    Run `load_brava_gene.sh` before `load_phenotypes.sh` against the same BigQuery dataset on
    daly.
@@ -1142,7 +1142,7 @@ These four loaders default `GCS_BUCKET` to the placeholder `bucket-name`, so set
 
     `PROFILE` selects both the dataset registry and, through the registry's `metadata_file` URIs, the bucket the metadata is read from; `GCS_BUCKET`/`GCS_PREFIX` only control where the generated NDJSON is staged (default `finngen-commons` / `results_api_data/mapping_files/`).
 
-    The builder owns `BQ_DATASETS_BY_DATASET_ID`, the registry-key → results-view-`dataset` map. That value is baked into the source credible-set TSVs by genetics-results-munge and `datasets.yaml` never records it, so **a new dataset must be added there** or it gets a `datasets` row with `dataset = NULL` and no `phenotypes` rows. The loader cross-checks the map against the live views in **all** directions, and any mismatch **fails the build**:
+    The registry-key → results-view-`dataset` link is each entry's `dataset` field in `datasets.yaml` (`build_phenotypes.results_view_datasets`). That value is baked into the source credible-set TSVs by genetics-results-munge, so the registry records it rather than deriving it, and **a new dataset must carry the field** or it gets a `datasets` row with `dataset = NULL` and no `phenotypes` rows. The loader cross-checks the map against the live views in **all** directions, and any mismatch **fails the build**:
 
 - a live `dataset` value with no registry entry,
 - a registry claim that no results table contains,

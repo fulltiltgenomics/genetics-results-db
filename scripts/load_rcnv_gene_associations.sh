@@ -10,7 +10,7 @@
 # The file DOES carry a `dataset` column ('Collins_rCNV_2022' on every row), unlike the
 # dosage-sensitivity scores next to it, so no --const-column is needed. That column is what
 # rcnv_gene_associations_v's CASE switches on and what the registry cross-check in
-# load_phenotypes.sh matches against BQ_DATASETS_BY_DATASET_ID['collins_rcnv_2022'] —
+# load_phenotypes.sh matches against the collins_rcnv_2022 entry's `dataset` field —
 # which means this table must be loaded BEFORE load_phenotypes.sh runs, or that check
 # fails for the whole profile.
 #
