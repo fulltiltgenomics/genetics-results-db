@@ -565,7 +565,7 @@ WHERE cs.chr = 6 AND cs.pos BETWEEN 32000000 AND 33000000
 
 Dataset registry: what every `dataset` value appearing in the results views actually is. 888 rows, of which 841 are eQTL Catalogue QTD sub-studies. Unique on `dataset`, so `JOIN datasets_v USING (dataset)` never fans results out — where several registry entries share one results-view dataset (`pgc_scz` + `pgc_bip` inside `PGC`, the two Genebass products inside `genebass`, the two IBD exome products inside `IBD_exome`) they are merged into one row and `dataset_ids` lists every contributor.
 
-`dataset` is NULL for the seven registry entries with no BigQuery presence — summary-statistics-only products, expression, chromatin peaks and gene-disease sets that only results-api serves. They are kept so the table answers "what data exists at all"; filter `dataset IS NOT NULL` for queryable datasets only.
+`dataset` is NULL for the seven registry entries with no BigQuery presence — summary-statistics-only products, expression, chromatin peaks and gene-disease sets that only results-api serves. Registry entries marked `on_request: true` (the sandbox custom GWAS releases) get no row at all — results-api serves them only to a caller who names the resource, and this table is the catalogue every SQL caller reads. They are kept so the table answers "what data exists at all"; filter `dataset IS NOT NULL` for queryable datasets only.
 
 | Column | Type | Required | Description |
 |---|---|---|---|

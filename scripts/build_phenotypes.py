@@ -460,6 +460,9 @@ def build_datasets(registry, resources, metadata_by_dataset_id, absent):
     `dataset` is NULL for registry entries with no BigQuery presence - they exist in the
     registry but are served only by results-api, and saying otherwise would send agents
     looking for tables that hold nothing. Those rows stay one-per-registry-entry.
+
+    An `on_request` entry gets no row at all: it is served only to a caller who names
+    it, and a row here would put it in the one catalogue every SQL caller reads.
     """
     rows = []
     by_dataset = {}
@@ -489,6 +492,8 @@ def build_datasets(registry, resources, metadata_by_dataset_id, absent):
         existing["coloc_partner_only"] &= row["coloc_partner_only"]
 
     for dataset_id, entry in registry.items():
+        if entry.get("on_request"):
+            continue
         resource = entry.get("resource")
         resource_meta = resources.get(resource, {})
         base = {

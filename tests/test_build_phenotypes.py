@@ -186,6 +186,18 @@ def test_registry_entries_without_bigquery_presence_get_a_null_dataset():
     assert gtex["dataset"] is None
 
 
+def test_on_request_entries_get_no_row_at_all():
+    registry = {**REGISTRY, "finngen_custom_r14_gwas": {
+        "resource": "finngen", "version": "R14", "description": "sandbox runs",
+        "author": "FinnGen sandbox users", "publication_date": "NA", "data_type": "gwas",
+        "trait_type": "mixed", "metadata_file": None, "metadata_harmonizer": None,
+        "on_request": True,
+    }}
+    rows = build_datasets(registry, RESOURCES, METADATA, ABSENT)
+    assert not [r for r in rows if "finngen_custom_r14_gwas" in r["dataset_ids"]]
+    assert len(rows) == len(_datasets())
+
+
 def test_collection_subdatasets_become_their_own_rows():
     rows = _datasets()
     qtd = {r["dataset"]: r for r in rows if (r["dataset"] or "").startswith("QTD")}
