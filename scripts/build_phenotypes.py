@@ -91,8 +91,6 @@ ABSENT_FROM_RESULTS = {
     "QTD000869": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000910": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000915": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
-    # loaded on finngen first (scripts/load_asc.sh); drop this entry when daly is loaded
-    "ASC2": (("daly",), "ASC 2026 exome counts not yet loaded in this deployment"),
 }
 
 
