@@ -536,8 +536,8 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 | alt | STRING | Yes | Alternate allele |
 | INFO | FLOAT64 | No | Imputation INFO score |
 | AF | FLOAT64 | No | Alternate allele frequency in FinnGen |
-| AC_Het | INT64 | No | Heterozygous genotype count in FinnGen |
-| AC_Hom | INT64 | No | Homozygous (alt) genotype count in FinnGen |
+| AC_Het | INT64 | No | Alt allele count in heterozygous genotypes in FinnGen (one per heterozygote) |
+| AC_Hom | INT64 | No | Alt allele count in homozygous (alt/alt) genotypes in FinnGen (two per homozygote) |
 | most_severe | STRING | No | Most severe variant consequence (VEP) |
 | gene_most_severe | STRING | No | Gene of the most severe consequence |
 | rsid | STRING | No | dbSNP rsID |
