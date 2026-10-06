@@ -99,7 +99,7 @@ See [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md).
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| dataset | STRING | Yes | Source dataset (FinnGen_R14, Open_Targets_26.06, etc.) |
+| dataset | STRING | Yes | Source dataset (FinnGen_R14, Open_Targets_26.09, etc.) |
 | resource | STRING | Yes | Resource identifier (lowercase), derived from `dataset` at load time. Clustering key — filter on this, not `dataset` |
 | data_type | STRING | Yes | GWAS, eQTL, pQTL, sQTL, caQTL |
 | trait | STRING | Yes | Phenotype/trait name. For `caQTL` rows this is a chromatin peak id (`chr-start-end`), never a gene — reach genes via [peak_to_gene](#peak_to_gene) |
@@ -1088,6 +1088,8 @@ genetics-results-db/
    Loads run in parallel: each table's wipe (the `credible_sets` surgical `DELETE`, and the first `WRITE_TRUNCATE` load of each coloc table) is awaited before that table's files are appended concurrently. `credible_sets` loads first, then `colocalization` and `coloc_credsets` load concurrently.
 
    This script owns the genuinely fine-mapped credible sets, including `PGC_SCZ_2022` (the published PGC schizophrenia FINEMAP sets, Trubetskoy et al. 2022) — pseudo credible sets belong to `load_pseudo.sh` instead. `PGC_SCZ_2022` rows sit next to the `PGC` pseudo rows under resource `pgc` and cover the same trait code `SCZ`, so filtering on `resource` alone mixes fine-mapped and pseudo results.
+
+   `CREDSET_FILES` in the script is the list of source objects; the relative layout under `credible_sets/` is the same in both deployments' buckets, so `GCS_BUCKET`/`GCS_PREFIX` are the only per-deployment inputs. A resource re-annotated against a newer gnomAD (`most_severe`/`gene_most_severe` re-stamped, every other column unchanged) is written to a sibling prefix (`<release>_gnomad411/`) rather than over the old objects, so a reload can be compared against the previous table and rolled back by pointing the list back. Open Targets is the exception: its re-annotation coincided with release 26.09, whose `trait` is `<readable name>_(<GCST accession>)` while `trait_original` stays the bare accession, so the phenotypes join (below) is untouched. The pre-load `DELETE` names the superseded `dataset` value next to the new one until the old rows are gone from every deployment.
 
 3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
    ```bash

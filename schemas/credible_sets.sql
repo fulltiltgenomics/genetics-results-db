@@ -31,7 +31,7 @@
 
 CREATE TABLE IF NOT EXISTS `genetics_results.credible_sets`
 (
-  dataset STRING NOT NULL OPTIONS(description="Source dataset (FinnGen_R14, Open_Targets_26.06, etc.)"),
+  dataset STRING NOT NULL OPTIONS(description="Source dataset (FinnGen_R14, Open_Targets_26.09, etc.)"),
   resource STRING NOT NULL OPTIONS(description="Resource identifier (lowercase) derived from dataset at load time; clustering key"),
   data_type STRING NOT NULL OPTIONS(description="GWAS, eQTL, pQTL, sQTL, caQTL"),
   trait STRING NOT NULL OPTIONS(description="Phenotype/trait ID"),

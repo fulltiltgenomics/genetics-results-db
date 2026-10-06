@@ -42,6 +42,7 @@ from collections import defaultdict
 import fsspec
 import yaml
 
+
 def results_view_datasets(entry):
     """The results-view `dataset` values a registry entry appears under.
 
@@ -267,6 +268,14 @@ def _pheweb(items, entry):
 
 
 def _open_targets(items, entry):
+    """Open Targets study index (one item per study, keyed by its GWAS Catalog accession).
+
+    The key is the bare `studyId` because that is what the credible-set files store in
+    `trait_original`. Their `trait` column is a display form, `<sanitized name>_(<accession>)`,
+    built by genetics-results-munge; it is not reproduced here, exactly as FinnGen's
+    phenostring-derived `trait` is not - the display string lives in the results rows and
+    the phenotypes table only has to resolve the code.
+    """
     rows = []
     for item in items:
         n_cases = safe_int(item.get("nCases"))

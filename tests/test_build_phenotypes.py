@@ -75,6 +75,13 @@ REGISTRY = {
         "data_type": "gene_based", "trait_type": "mixed",
         "metadata_file": "gs://x/brava_pheno.json", "metadata_harmonizer": "pheweb",
     },
+    "open_targets": {
+        "dataset": "Open_Targets_26.09",
+        "resource": "open_targets", "version": "26.09", "description": "OT GWAS fine-mapping",
+        "author": "Open Targets", "publication_date": "2026-09-24",
+        "data_type": "gwas", "trait_type": "mixed",
+        "metadata_file": "gs://x/ot_2609_data_studies.json", "metadata_harmonizer": "open_targets",
+    },
     "eqtl_catalogue": {
         "resource": "eqtl_catalogue", "version": "R8", "description": "collection",
         "author": "eQTL Catalogue", "publication_date": "2026-01-01",
@@ -119,6 +126,18 @@ METADATA = {
          "num_cases": 30000, "num_controls": 350000, "num_samples": 380000},
         {"phenocode": "LDLC", "phenostring": "LDL cholesterol", "category": "Both",
          "num_samples": 420000},
+    ],
+    # the study index as Open Targets ships it; the credible-set rows this must join carry
+    # trait='Mitochondrial_DNA_copy_number_(GCST90026372)', trait_original='GCST90026372'
+    "open_targets": [
+        {"studyId": "GCST90026372", "projectId": "GCST",
+         "traitFromSource": "Mitochondrial DNA copy number",
+         "nCases": 0, "nControls": 0, "nSamples": 395718,
+         "publicationFirstAuthor": "Longchamps RJ", "publicationDate": "2022-01-20"},
+        {"studyId": "GCST90018894", "projectId": "GCST",
+         "traitFromSource": "Type 2 diabetes",
+         "nCases": 38841, "nControls": 451248, "nSamples": 490089,
+         "publicationFirstAuthor": "Sakaue S", "publicationDate": "2021"},
     ],
     "eqtl_catalogue": [
         {"dataset_id": "QTD000001", "study_label": "Alasoo_2018",
@@ -173,6 +192,27 @@ def test_trait_type_derived_from_counts_not_hardcoded_binary():
     assert by_code["HEIGHT_IRN"]["trait_type"] == "quantitative"
     assert by_code["T2D"]["trait_type"] == "binary"
     assert by_code["T2D"]["n_samples"] == 95803 + 300000
+
+
+def test_open_targets_key_is_the_accession_not_the_display_trait():
+    """Open Targets credible-set rows store the bare accession in trait_original and a
+    `<name>_(<accession>)` display form in trait; the join is on trait_original, so the
+    built key must be the accession and the display form must not be derived here."""
+    rows, _ = _phenotypes()
+    ot = {r["trait_original"]: r for r in rows if r["dataset"] == "Open_Targets_26.09"}
+    assert set(ot) == {"GCST90026372", "GCST90018894"}
+    mito = ot["GCST90026372"]
+    assert mito["trait_name"] == "Mitochondrial DNA copy number"
+    assert mito["trait_type"] == "quantitative"
+    assert mito["category"] == "GCST"
+    assert mito["author"] == "Longchamps RJ"
+    assert mito["publication_date"] == "2022-01-20"
+    assert mito["version"] == "26.09"
+    t2d = ot["GCST90018894"]
+    assert t2d["trait_type"] == "binary"
+    assert t2d["n_cases"] == 38841
+    # a year-only study date falls back to the release date rather than being invented
+    assert t2d["publication_date"] == "2026-09-24"
 
 
 def test_eqtl_catalogue_produces_no_phenotype_rows():
