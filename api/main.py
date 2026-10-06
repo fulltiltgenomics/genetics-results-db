@@ -961,6 +961,8 @@ async def get_schema(http_request: Request, table: str | None = None):
                     ),
                     "description": overrides.get(field.name, field.description or ""),
                 }
+                if field.field_type in ("RECORD", "STRUCT"):
+                    col["fields"] = _struct_fields(field)
                 if field.name in cat_values:
                     col["allowed_values"] = cat_values[field.name]
                 grouped_key = next(
@@ -1198,6 +1200,26 @@ async def execute_query(request: QueryRequest, http_request: Request):
         # errors, each priced by the dry run, eat the execution's budget without spending a byte
         if charged and not settled:
             _reconcile_aggregate(caps.jti, -estimated_bytes)
+
+
+def _struct_fields(field: Any) -> list[dict[str, Any]]:
+    """Sub-fields of a STRUCT column for /schema.
+
+    The column's own `type` is just RECORD, which names none of the leaves a caller has to
+    spell to read it (`UNNEST(col) AS c` then `c.<leaf>`).
+    """
+    out = []
+    for sub in field.fields:
+        entry: dict[str, Any] = {
+            "name": sub.name,
+            "type": sub.field_type,
+            "mode": sub.mode,
+            "description": sub.description or "",
+        }
+        if sub.field_type in ("RECORD", "STRUCT"):
+            entry["fields"] = _struct_fields(sub)
+        out.append(entry)
+    return out
 
 
 def _serialize_value(value: Any) -> Any:

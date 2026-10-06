@@ -54,6 +54,7 @@ CROSS_CHECK_EXCLUDED = {
     "datasets_v",
     "dosage_sensitivity_v",
     "gene_annotations_v",
+    "gnomad_variant_annotation_v",
     "phenotypes_v",
     "variant_annotation_v",
 }

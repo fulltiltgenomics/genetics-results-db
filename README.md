@@ -44,6 +44,8 @@ The loaders run the Python helpers through the interpreter `scripts/lib/common.s
 
 [scripts/load_variant_annotation.sh](scripts/load_variant_annotation.sh) loads FinnGen R14 per-variant functional annotations (truncates `variant_annotation`)
 
+[scripts/load_gnomad_variant_annotation.sh](scripts/load_gnomad_variant_annotation.sh) shards the served gnomAD sites file by chromosome and loads it (replaces `gnomad_variant_annotation` one chromosome at a time; needs a local copy of the file)
+
 [scripts/load_gene_annotations.sh](scripts/load_gene_annotations.sh) builds and loads the HGNC/GENCODE gene reference table (truncates `gene_annotations`)
 
 [scripts/load_dosage_sensitivity.sh](scripts/load_dosage_sensitivity.sh) loads the Collins et al. 2022 gene dosage-sensitivity scores (truncates `dosage_sensitivity`)
@@ -206,6 +208,7 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 - **variant_effect** — in-silico predicted variant effects on chromatin accessibility (ChromBPNet, FLARE)
 - **mpra** — measured cis-regulatory allelic activity from a reporter assay (Siraj et al.)
 - **variant_annotation** — FinnGen R14 per-variant functional annotations and allele frequencies
+- **gnomad_variant_annotation** — gnomAD per-variant frequencies by genetic ancestry group and VEP annotation (per-gene consequences as a typed array)
 - **peak_to_gene** — Open4Gene peak-to-gene links, joining peak-keyed caQTL results to genes
 - **hla_associations** — classical HLA allele associations (FinnGen R14; keyed by allele, not by variant)
 - **dosage_sensitivity** — gene-level pHaplo/pTriplo dosage-sensitivity scores (Collins et al. 2022 rare-CNV map)

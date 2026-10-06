@@ -74,3 +74,14 @@ def test_serialize_value_recurses_and_keeps_scalars(main):
     assert main._serialize_value(("x", 2)) == ["x", 2]
     assert main._serialize_value(decimal.Decimal("0.25")) == "0.25"
     assert main._serialize_value(True) is True
+
+
+def test_an_array_of_structs_with_inner_arrays_and_nulls_stays_nested(main):
+    """The shape of gnomad_variant_annotation_v.consequences, as the BigQuery client hands
+    it over: a list of dicts, an inner list, NULL leaves, and an empty list for no annotation."""
+    cell = [
+        {"gene_symbol": "PCSK9", "consequences": ["missense_variant"], "canonical": 1},
+        {"gene_symbol": None, "consequences": [], "canonical": None},
+    ]
+    assert main._serialize_value(cell) == cell
+    assert main._serialize_value([]) == []

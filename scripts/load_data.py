@@ -327,6 +327,46 @@ SCHEMAS = {
         bigquery.SchemaField("GENOME_enrichment_nfe", "FLOAT64"),
         bigquery.SchemaField("index", "INT64"),
     ],
+    # `variant` is not in the source file; it is computed on projection (DERIVED_COLUMNS).
+    # The other columns follow the served gnomAD sites file's header order.
+    "gnomad_variant_annotation": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("variant", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("rsids", "STRING"),
+        bigquery.SchemaField("filters", "STRING"),
+        bigquery.SchemaField("AN", "INT64"),
+        bigquery.SchemaField("AF", "FLOAT64"),
+        bigquery.SchemaField("AF_afr", "FLOAT64"),
+        bigquery.SchemaField("AF_amr", "FLOAT64"),
+        bigquery.SchemaField("AF_asj", "FLOAT64"),
+        bigquery.SchemaField("AF_eas", "FLOAT64"),
+        bigquery.SchemaField("AF_fin", "FLOAT64"),
+        bigquery.SchemaField("AF_mid", "FLOAT64"),
+        bigquery.SchemaField("AF_nfe", "FLOAT64"),
+        bigquery.SchemaField("AF_remaining", "FLOAT64"),
+        bigquery.SchemaField("AF_sas", "FLOAT64"),
+        bigquery.SchemaField("most_severe", "STRING"),
+        bigquery.SchemaField("gene_most_severe", "STRING"),
+        # a JSON array string in the source; staged as STRING and parsed on projection
+        # (JSON_ARRAY_COLUMNS). The sub-fields are the JSON's keys, in the file's order.
+        bigquery.SchemaField(
+            "consequences",
+            "RECORD",
+            mode="REPEATED",
+            fields=(
+                bigquery.SchemaField("gene_symbol", "STRING"),
+                bigquery.SchemaField("gene_id", "STRING"),
+                bigquery.SchemaField("consequences", "STRING", mode="REPEATED"),
+                bigquery.SchemaField("gene_symbol_source", "STRING"),
+                bigquery.SchemaField("canonical", "INT64"),
+                bigquery.SchemaField("biotype", "STRING"),
+            ),
+        ),
+        bigquery.SchemaField("genome_or_exome", "STRING", mode="REQUIRED"),
+    ],
     # column order must match TSV file exactly (the Open4Gene results the tabix API
     # serves at /peak_to_genes: chrom, start, end, peak_id, gene_id, symbol, cell_type,
     # total_cell_num, expr_cell_num, open_cell_num, hurdle_*). The source chrom is
@@ -596,6 +636,11 @@ CHR_STRING_TABLES = {
 # the tabix API strips the same prefix at read time. Routed through the staging path.
 CELL_TYPE_PREFIX_TABLES = {"peak_to_gene"}
 
+# tables whose source carries raw JSON in a field. The CSV loader's default quote
+# character is the double quote, which JSON is full of, so quoting is switched off and
+# every field is taken verbatim. That also means a field cannot contain a tab or newline.
+UNQUOTED_TABLES = {"gnomad_variant_annotation"}
+
 CELL_TYPE_STRIP_PREFIX_SQL = "REGEXP_REPLACE({col}, r'^predicted\\.celltype\\.', '')"
 
 # SQL to normalize a chrom string to the INT64 encoding used across the tables:
@@ -643,7 +688,60 @@ DERIVED_COLUMNS = {
         "variant": "CONCAT(`chr`, ':', `pos`, ':', `ref`, ':', `alt`)",
         "resource": lambda: resource_case_sql("credible_sets_v"),
     },
+    "gnomad_variant_annotation": {
+        "variant": "CONCAT(`chr`, ':', `pos`, ':', `ref`, ':', `alt`)",
+    },
 }
+
+
+# ARRAY<STRUCT> columns whose source field is a JSON array of objects. The CSV loader
+# cannot populate a REPEATED column, so the field is staged as the raw STRING and parsed
+# into the typed array on projection; the SQL is generated from the SCHEMAS sub-fields so
+# the keys are written down once.
+JSON_ARRAY_COLUMNS = {"gnomad_variant_annotation": {"consequences"}}
+
+
+def json_array_projection_sql(field: bigquery.SchemaField) -> str:
+    """Expression turning the staged JSON string `field.name` into its typed array.
+
+    A NULL source (the file's NA) yields an empty array, which is also all BigQuery can
+    store for it. The explicit offset ordering is what keeps the file's element order:
+    an ARRAY subquery without ORDER BY promises none.
+    """
+    parts = []
+    for sub in field.fields:
+        path = f"'$.{sub.name}'"
+        if sub.mode == "REPEATED" and sub.field_type == "STRING":
+            expr = f"JSON_VALUE_ARRAY(e, {path})"
+        elif sub.mode != "REPEATED" and sub.field_type == "STRING":
+            expr = f"JSON_VALUE(e, {path})"
+        elif sub.mode != "REPEATED" and sub.field_type in ("INT64", "INTEGER"):
+            expr = f"SAFE_CAST(JSON_VALUE(e, {path}) AS INT64)"
+        else:
+            raise ValueError(
+                f"no JSON projection for {field.name}.{sub.name} ({sub.mode} {sub.field_type})"
+            )
+        parts.append(f"{expr} AS `{sub.name}`")
+    return (
+        f"ARRAY(SELECT AS STRUCT {', '.join(parts)}"
+        f" FROM UNNEST(JSON_QUERY_ARRAY(`{field.name}`)) AS e WITH OFFSET AS o ORDER BY o)"
+    )
+
+
+def json_array_mismatch_sql(field: bigquery.SchemaField) -> str:
+    """Predicate true for a staged value the typed array does not reproduce.
+
+    The JSON functions answer NULL rather than fail on a value they cannot read, so a
+    malformed string, an unexpected key, a missing key or a wrongly typed value would
+    otherwise load as an empty or thinner array. Comparing the parsed source with the
+    typed result, both as canonical JSON, catches all of them without listing them. One
+    difference passes by design: a null inner list equals the empty list it is stored as.
+    """
+    return (
+        f"`{field.name}` IS NOT NULL AND IFNULL("
+        f"TO_JSON_STRING(SAFE.PARSE_JSON(`{field.name}`))"
+        f" != TO_JSON_STRING(TO_JSON({json_array_projection_sql(field)})), TRUE)"
+    )
 
 
 def _coerce_const(value: str, bq_type: str):
@@ -658,6 +756,22 @@ def _coerce_const(value: str, bq_type: str):
     return value
 
 
+def _csv_load_config(table_type: str, schema, skip_leading_rows: int, write_disposition):
+    config = LoadJobConfig(
+        schema=schema,
+        source_format=SourceFormat.CSV,
+        field_delimiter="\t",
+        skip_leading_rows=skip_leading_rows,
+        write_disposition=write_disposition,
+        allow_quoted_newlines=True,
+        null_marker="NA",
+    )
+    if table_type in UNQUOTED_TABLES:
+        config.quote_character = ""
+        config.allow_quoted_newlines = False
+    return config
+
+
 def load_table(
     client: bigquery.Client,
     gcs_uri: str,
@@ -666,6 +780,8 @@ def load_table(
     write_disposition: str = "WRITE_APPEND",
     skip_leading_rows: int = 1,
     const_columns: dict | None = None,
+    replace_chr: int | None = None,
+    expect_rows: int | None = None,
 ):
     """Load a GCS file into a BigQuery table.
 
@@ -678,6 +794,14 @@ def load_table(
     awaited yet and the caller reads it off the completed LoadJob; the staging
     path has necessarily already awaited its jobs and returns the INSERT's
     `num_dml_affected_rows`.
+
+    `replace_chr` makes a per-chromosome load rerunnable: the target's rows for that
+    chromosome are deleted before the INSERT, after the staged rows have been checked
+    to hold no other chromosome. A JSON_ARRAY_COLUMNS value that does not parse into
+    its typed array is refused at the same point. `expect_rows` refuses a staged row count other than
+    the one given, before the target is touched. Both need the staging table, so they
+    are refused on the direct path. The DELETE and the INSERT are separate statements:
+    a failure between them leaves the chromosome empty until the load is run again.
 
     The staging path never creates the target: it inserts into the table
     `scripts/setup_bigquery.sh` made from `schemas/*.sql`, which is where the
@@ -692,6 +816,7 @@ def load_table(
     convert_chr = table_type in CHR_STRING_TABLES
     strip_cell_type_prefix = table_type in CELL_TYPE_PREFIX_TABLES
     derived_columns = DERIVED_COLUMNS.get(table_type, {})
+    json_array_columns = JSON_ARRAY_COLUMNS.get(table_type, set())
 
     if derived_columns and convert_chr:
         # derived expressions read the STAGING columns, where `chr` is still the raw
@@ -708,7 +833,11 @@ def load_table(
         )
 
     if table_type in JSON_SCHEMAS and (
-        const_columns or convert_chr or strip_cell_type_prefix or derived_columns
+        const_columns
+        or convert_chr
+        or strip_cell_type_prefix
+        or derived_columns
+        or json_array_columns
     ):
         # const-column injection / column rewrites rely on a CSV staging table;
         # they are not wired up for the JSON load path (no current JSON table needs it)
@@ -718,8 +847,22 @@ def load_table(
         )
 
     needs_staging = (
-        bool(const_columns) or convert_chr or strip_cell_type_prefix or bool(derived_columns)
+        bool(const_columns)
+        or convert_chr
+        or strip_cell_type_prefix
+        or bool(derived_columns)
+        or bool(json_array_columns)
     )
+
+    if (replace_chr is not None or expect_rows is not None) and not needs_staging:
+        raise ValueError(
+            f"replace_chr / expect_rows need the staging path, which '{table_type}' does not take"
+        )
+    if replace_chr is not None and convert_chr:
+        # the single-chromosome check reads the staged `chr`, a raw string for these tables
+        raise ValueError(f"replace_chr is not supported for chr-string table '{table_type}'")
+    if replace_chr is not None and write_disposition != "WRITE_APPEND":
+        raise ValueError("replace_chr replaces one chromosome and requires WRITE_APPEND")
 
     if not needs_staging:
         # direct-load path: no constant columns to inject, no chr conversion
@@ -731,14 +874,11 @@ def load_table(
                 write_disposition=getattr(WriteDisposition, write_disposition),
             )
         else:
-            job_config = LoadJobConfig(
-                schema=full_schema,
-                source_format=SourceFormat.CSV,
-                field_delimiter="\t",
-                skip_leading_rows=skip_leading_rows,
-                write_disposition=getattr(WriteDisposition, write_disposition),
-                allow_quoted_newlines=True,
-                null_marker="NA",
+            job_config = _csv_load_config(
+                table_type,
+                full_schema,
+                skip_leading_rows,
+                getattr(WriteDisposition, write_disposition),
             )
         print(f"Loading {gcs_uri} into {table_id}...")
         # left un-awaited so the caller's error handling can report job.errors
@@ -759,6 +899,8 @@ def load_table(
             continue
         if convert_chr and f.name == "chr":
             staging_schema.append(bigquery.SchemaField("chr", "STRING"))
+        elif f.name in json_array_columns:
+            staging_schema.append(bigquery.SchemaField(f.name, "STRING"))
         else:
             staging_schema.append(f)
     staging_id = f"{table_id}__staging_{uuid.uuid4().hex[:8]}"
@@ -776,14 +918,8 @@ def load_table(
     if write_disposition == "WRITE_EMPTY" and target.num_rows:
         raise RuntimeError(f"WRITE_EMPTY: {table_id} already holds {target.num_rows} rows")
 
-    load_config = LoadJobConfig(
-        schema=staging_schema,
-        source_format=SourceFormat.CSV,
-        field_delimiter="\t",
-        skip_leading_rows=skip_leading_rows,
-        write_disposition=WriteDisposition.WRITE_TRUNCATE,
-        allow_quoted_newlines=True,
-        null_marker="NA",
+    load_config = _csv_load_config(
+        table_type, staging_schema, skip_leading_rows, WriteDisposition.WRITE_TRUNCATE
     )
     print(f"Loading {gcs_uri} into staging {staging_id}...")
     load_job = client.load_table_from_uri(gcs_uri, staging_id, job_config=load_config)
@@ -792,6 +928,40 @@ def load_table(
     print(f"  staged {staged_rows} rows")
 
     try:
+        if expect_rows is not None and staged_rows != expect_rows:
+            raise RuntimeError(
+                f"staged {staged_rows} rows from {gcs_uri}, expected {expect_rows}: "
+                f"{table_id} left untouched"
+            )
+        # every refusal is counted in one pass over the staging table, and before the
+        # target is modified: after the DELETE below there is nothing left to protect
+        refusals = {}
+        if replace_chr is not None:
+            # a stray chromosome would be appended again on every rerun, because the
+            # DELETE below only clears the one named
+            refusals[f"are not on chr {replace_chr}"] = (
+                f"`chr` IS DISTINCT FROM {int(replace_chr)}"
+            )
+        for f in full_schema:
+            if f.name in json_array_columns:
+                refusals[f"carry a `{f.name}` value the typed array does not reproduce"] = (
+                    json_array_mismatch_sql(f)
+                )
+        if refusals:
+            counts = next(
+                iter(
+                    client.query(
+                        f"SELECT {', '.join(f'COUNTIF({sql})' for sql in refusals.values())}"
+                        f" FROM `{staging_id}`"
+                    ).result()
+                )
+            )
+            for reason, count in zip(refusals, counts):
+                if count:
+                    raise RuntimeError(
+                        f"{count} staged rows from {gcs_uri} {reason}: {table_id} left untouched"
+                    )
+
         # project staging into the target with constants filled in
         col_exprs = []
         params = []
@@ -808,6 +978,8 @@ def load_table(
                 col_exprs.append(f"({expr}) AS `{f.name}`")
             elif convert_chr and f.name == "chr":
                 col_exprs.append(CHR_STRING_TO_INT_SQL.format(col="`chr`") + " AS `chr`")
+            elif f.name in json_array_columns:
+                col_exprs.append(f"{json_array_projection_sql(f)} AS `{f.name}`")
             elif strip_cell_type_prefix and f.name == "cell_type":
                 col_exprs.append(
                     CELL_TYPE_STRIP_PREFIX_SQL.format(col="`cell_type`")
@@ -829,9 +1001,15 @@ def load_table(
         query_config = bigquery.QueryJobConfig(query_parameters=params)
         annotations = [f"{k}={v!r}" for k, v in const_columns.items()]
         annotations += [f"computed {name}" for name in derived_columns]
+        annotations += [f"parsed {name}" for name in sorted(json_array_columns)]
         if write_disposition == "WRITE_TRUNCATE":
             print(f"Truncating {table_id}...")
             client.query(f"TRUNCATE TABLE `{table_id}`").result()
+        if replace_chr is not None:
+            print(f"Deleting chr {replace_chr} from {table_id}...")
+            client.query(
+                f"DELETE FROM `{table_id}` WHERE `chr` = {int(replace_chr)}"
+            ).result()
         print(f"Projecting staging -> {table_id} ({', '.join(annotations)})...")
         query_job = client.query(sql, job_config=query_config)
         query_job.result()
@@ -868,6 +1046,23 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "--replace-chr",
+        type=int,
+        metavar="N",
+        help=(
+            "Delete the target's rows for chromosome N before inserting, so a "
+            "per-chromosome load can be rerun without duplicating rows. The source "
+            "must hold that chromosome only. Staging-path tables, WRITE_APPEND only."
+        ),
+    )
+    parser.add_argument(
+        "--expect-rows",
+        type=int,
+        metavar="N",
+        help="Fail before touching the target unless exactly N rows were staged.",
+    )
+
     args = parser.parse_args()
 
     const_columns: dict[str, str] = {}
@@ -895,6 +1090,8 @@ def main():
         args.write_disposition,
         args.skip_rows,
         const_columns,
+        args.replace_chr,
+        args.expect_rows,
     )
 
     # wait for job to complete (a no-op when load_table already awaited)

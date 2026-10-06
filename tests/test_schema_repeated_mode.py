@@ -19,8 +19,9 @@ VIEW = "rcnv_segments_v"
 
 
 class _Field:
-    def __init__(self, name, field_type, mode):
-        self.name, self.field_type, self.mode, self.description = name, field_type, mode, ""
+    def __init__(self, name, field_type, mode, fields=(), description=""):
+        self.name, self.field_type, self.mode, self.description = name, field_type, mode, description
+        self.fields = fields
 
 
 class _ViewMeta:
@@ -59,3 +60,47 @@ def test_repeated_view_column_is_not_overridden_by_its_scalar_base_column(
     modes = {c["name"]: c["mode"] for c in table["columns"]}
     assert modes == {"region": "REQUIRED", "genes": "REPEATED", "resource": "REQUIRED"}
     assert table["row_count"] == 5
+
+
+class _StructViewMeta:
+    num_rows = 0
+    description = ""
+    schema = [
+        _Field("pos", "INTEGER", "NULLABLE"),
+        _Field(
+            "consequences",
+            "RECORD",
+            "REPEATED",
+            fields=(
+                _Field("gene_symbol", "STRING", "NULLABLE", description="Gene symbol"),
+                _Field("consequences", "STRING", "REPEATED"),
+                _Field("canonical", "INTEGER", "NULLABLE"),
+            ),
+        ),
+    ]
+
+
+class _StructSchemaBQ(FakeInternalBQ):
+    def get_table(self, ref):
+        return _StructViewMeta()
+
+
+def test_a_struct_column_names_its_leaves(main, client, monkeypatch):
+    """`RECORD` alone names nothing a caller can select; the sub-fields are what a query spells."""
+    monkeypatch.setattr(main, "_CATEGORICAL_COLUMNS", {})
+    monkeypatch.setattr(main, "bq_client", _StructSchemaBQ([]))
+
+    resp = client.get(f"/schema?table={VIEW}", headers={"Authorization": f"Bearer {SECRET}"})
+
+    assert resp.status_code == 200
+    columns = {c["name"]: c for c in resp.json()["tables"][0]["columns"]}
+    assert "fields" not in columns["pos"]
+    assert (columns["consequences"]["type"], columns["consequences"]["mode"]) == (
+        "RECORD",
+        "REPEATED",
+    )
+    assert columns["consequences"]["fields"] == [
+        {"name": "gene_symbol", "type": "STRING", "mode": "NULLABLE", "description": "Gene symbol"},
+        {"name": "consequences", "type": "STRING", "mode": "REPEATED", "description": ""},
+        {"name": "canonical", "type": "INTEGER", "mode": "NULLABLE", "description": ""},
+    ]

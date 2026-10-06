@@ -56,6 +56,8 @@ BigQuery Dataset
   │   └── mpra_v (view: adds resource column)
   ├── variant_annotation (partitioned by chr, clustered by most_severe, gene_most_severe)
   │   └── variant_annotation_v (view: adds constant resource='finngen')
+  ├── gnomad_variant_annotation (partitioned by chr, clustered by pos)
+  │   └── gnomad_variant_annotation_v (view: adds constant resource='gnomad')
   ├── peak_to_gene (unpartitioned link table, clustered by symbol, cell_type, peak_id)
   │   └── peak_to_gene_v (view: adds resource column)
   ├── hla_associations (unpartitioned, clustered by phenotype, gene, allele)
@@ -545,6 +547,17 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 | GENOME_enrichment_nfe | FLOAT64 | No | Finnish vs non-Finnish European (NFE) enrichment, gnomAD genomes |
 | index | INT64 | No | Row index in the source annotation file |
 
+### gnomad_variant_annotation
+
+gnomAD genomes+exomes sites, one row per variant: frequencies overall and per genetic ancestry group, site filters, rsIDs and VEP consequences. It is loaded from the same bgzip+tabix file the genetics-results-api serves, and is a separate table from `variant_annotation` so that table's unfiltered queries stay FinnGen-sized.
+
+Column list, partitioning and the reasoning behind both: `schemas/gnomad_variant_annotation.sql`. What a caller needs to know:
+
+- **Filter on `chr`, and on `pos` whenever a position or region is known.** The table is partitioned by `chr` and clustered by `pos` only. `variant` (chr:pos:ref:alt, stored, computed on load) is the join key to the association views and an output column, not a clustering key, so look a variant up by `chr` and `pos` and then match the alleles.
+- **A join from `credible_sets_v`** should match `chr`, `pos` and `variant`, and give the gnomAD side its own literal `chr =` so its partitions prune.
+- **`consequences` is a typed array**, `ARRAY<STRUCT<…>>`, one element per gene in the source file's order. The struct's field names are the keys of the JSON string the genetics-results-api serves for the same column, so the two shapes describe the same thing: here it is read with `UNNEST(consequences) AS c` and `c.<field>`, there it is a string to parse. Each leaf is billed separately, so a query that reads only `c.gene_symbol` does not pay for the rest of the annotation.
+- **No annotation is an empty array, never NULL.** BigQuery cannot store a NULL array, so the file's `NA` is `ARRAY_LENGTH(consequences) = 0`; a plain `, UNNEST(consequences)` join drops those variants and `LEFT JOIN UNNEST(consequences)` keeps them. The inner `consequences` list behaves the same way.
+
 ### phenotypes
 
 Trait/phenotype metadata: the human-readable name, trait type, category and sample sizes behind the opaque phenotype codes the results tables store. One row per `(dataset, trait_original)`, 32,611 rows. Built from the per-dataset `metadata_file` JSON/TSVs referenced by `datasets.yaml`, which were previously reachable only through genetics-results-api — so resolving a trait code cost a separate round trip.
@@ -675,6 +688,7 @@ because chat-backend and mcp-server both parse this response.
 
 `/schema` returns each view's columns with type/mode/description plus, for low-cardinality categorical columns, the actual allowed values discovered from the data. Column `mode` (NULLABLE/REQUIRED) and `row_count` are read from the underlying base table, since a BigQuery view reports every scalar column as NULLABLE. A REPEATED column keeps the view's own mode: it is the only signal that the column is an ARRAY, and `rcnv_segments_v` SPLITs scalar STRING base columns into arrays, so the base table's mode would erase it. View-only derived columns are declared explicitly: `variant` and `resource`/`resource1`/`resource2` are REQUIRED (non-null transforms of REQUIRED base columns), while `maf` is NULLABLE (`LEAST(aaf, 1-aaf)` with nullable `aaf`). For `credible_sets_v` the base table now answers for `variant`/`resource` directly — they are stored `NOT NULL` columns there, which is why the schema file declares them `NOT NULL` rather than following the nullable stored `variant` of `variant_effect`/`mpra`/`variant_annotation`: it keeps `/schema` reporting REQUIRED as before. Two shapes:
 
+- `fields`: on a STRUCT column only (`type` is `RECORD`), its sub-fields as `name`/`type`/`mode`/`description`, nested the same way — the leaves a query has to name.
 - `allowed_values`: flat list of valid values (e.g. `resource`, `dataset`, `most_severe`).
 - `allowed_values_by_<col>`: mapping from a parent column's value to the values valid for that parent. Used when a column's valid set depends on another (e.g. `data_type` depends on `resource`, `annotation` depends on `resource`).
 
@@ -961,6 +975,8 @@ genetics-results-db/
 │   ├── rcnv_window_associations_v.sql # View with resource column ('rcnv'); no join — a window has no gene
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
 │   ├── variant_annotation_v.sql       # View with constant resource='finngen'
+│   ├── gnomad_variant_annotation.sql  # gnomAD per-variant frequencies and VEP annotation (stored variant column, consequences as ARRAY<STRUCT>)
+│   ├── gnomad_variant_annotation_v.sql # View with constant resource='gnomad'
 │   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
 │   ├── phenotypes_v.sql               # Pass-through view (resource is a registry column)
 │   ├── datasets.sql                   # Dataset registry keyed by results-view `dataset`
@@ -989,6 +1005,7 @@ genetics-results-db/
 │   ├── load_rcnv_segments.sh      # Load Collins et al. 2022 rCNV segments (WRITE_TRUNCATE) + create rcnv_segments_v view
 │   ├── load_rcnv_window_associations.sh # Load Collins et al. 2022 rCNV sliding-window associations (WRITE_TRUNCATE) + create rcnv_window_associations_v view
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
+│   ├── load_gnomad_variant_annotation.sh # Shard the served gnomAD sites file by chromosome, upload, and load (one chromosome replaced per load; rerunnable)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   ├── load_phenotypes.sh         # Build + load phenotypes and datasets metadata tables (WRITE_TRUNCATE)
@@ -1130,6 +1147,13 @@ genetics-results-db/
    ./scripts/load_variant_annotation.sh
    ```
    Defaults to `gs://finngen-commons/results_api_data/variant_annotations/R14_annotated_variants_v0.small.gz`. Override `GCS_BUCKET`, `GCS_PREFIX`, or `VA_FILE` for other bucket layouts (e.g. `GCS_BUCKET=daly-genetics-results GCS_PREFIX=""`).
+
+   **gnomAD variant annotations** load separately, from a local copy of the served file rather than straight from GCS, because BigQuery refuses a compressed CSV above 4 GB and cannot split one:
+   ```bash
+   GNOMAD_FILE=/path/to/served.tsv.bgz WORK_DIR=/path/to/scratch \
+     SHARD_URI=gs://<bucket>/<shard prefix> ./scripts/load_gnomad_variant_annotation.sh
+   ```
+   The script tabixes one chromosome at a time into gzip shards under `SHARD_URI`, writes a row-count manifest per chromosome, creates the table and view if missing, and loads each chromosome through `load_data.py --replace-chr --expect-rows`: the chromosome's rows are deleted and re-inserted, and a staged row count that differs from the manifest is refused before the table is touched, so a rerun never duplicates rows. `consequences` is staged as the file's raw JSON string and parsed into the typed array by the insert; a chromosome holding a value the typed array does not reproduce (malformed JSON, an unexpected or missing key, a wrongly typed value) is refused at the same point rather than loaded as an empty or thinner array. Without `GNOMAD_FILE` it loads shards that already exist at `SHARD_URI` (another project loading a copy of them). `CHROMS`, `SKIP_LOAD`, `DRY_RUN` and the shard size are described in the script header. The delete and the insert are two statements, so a reader can see a chromosome missing while it is being replaced.
 
 9. **Load ASM-QTL results** (deCODE CpG + MDS; first file truncates, the second appends):
    ```bash

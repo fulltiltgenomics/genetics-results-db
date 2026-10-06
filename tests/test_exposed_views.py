@@ -34,6 +34,7 @@ EXPOSED_VIEWS = {
     "exome_variant_results_v",
     "gene_annotations_v",
     "gene_burden_results_v",
+    "gnomad_variant_annotation_v",
     "hla_associations_v",
     "mpra_v",
     "open_chromatin_v",
