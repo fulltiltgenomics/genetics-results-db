@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -304,10 +305,22 @@ if not _startup_secret:
 # refuses to start rather than warn when the sandbox is deployed and either secret is missing
 sandbox_auth.require_sandbox_config(_startup_secret)
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # the first /schema after a pod start pays every categorical-value scan (40 queries,
+    # measured 86 s with BigQuery's result cache cold); fill the cache off the serving
+    # threads so that cost lands on nobody's request. A daemon thread rather than awaiting
+    # it here: readiness and liveness poll /health from the moment uvicorn serves, and a
+    # startup that outlives the liveness window gets the pod killed before it is warm.
+    threading.Thread(target=_warm_values_cache, name="values-cache-warmup", daemon=True).start()
+    yield
+
+
 app = FastAPI(
     title="Genetics Results API",
     description="Query interface for genetics fine-mapping and colocalization data",
     version="1.0.0",
+    lifespan=_lifespan,
     dependencies=[Depends(require_auth)],
     # FastAPI mounts its docs with add_route, which bypasses app-level dependencies — the
     # schema would stay readable on an otherwise authenticated service. Re-declared below as
@@ -566,6 +579,8 @@ _BASE_TABLES = {name.removesuffix("_v"): name for name in VIEWS}
 
 _VALUES_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _VALUES_CACHE_TTL_SECONDS = 3600
+# handlers run in the threadpool, so two cold callers would otherwise both scan every view
+_values_fill_lock = threading.Lock()
 
 # View-only derived columns aren't in any base table, and BigQuery reports every
 # scalar view column as NULLABLE (only REPEATED survives). These are deterministic
@@ -610,10 +625,17 @@ def _get_categorical_values(view_name: str, caps: _Caps) -> dict[str, Any]:
         return {}
 
     cached = _VALUES_CACHE.get(view_name)
-    now = time.time()
-    if cached and now - cached[0] < _VALUES_CACHE_TTL_SECONDS:
+    if cached and time.time() - cached[0] < _VALUES_CACHE_TTL_SECONDS:
         return cached[1]
+    with _values_fill_lock:
+        cached = _VALUES_CACHE.get(view_name)
+        if cached and time.time() - cached[0] < _VALUES_CACHE_TTL_SECONDS:
+            return cached[1]
+        return _scan_categorical_values(view_name, config, caps)
 
+
+def _scan_categorical_values(view_name: str, config: dict[str, str | None], caps: _Caps) -> dict[str, Any]:
+    now = time.time()
     flat_cols = [col for col, dep in config.items() if dep is None]
     dep_cols = [(col, dep) for col, dep in config.items() if dep is not None]
 
@@ -656,6 +678,19 @@ def _get_categorical_values(view_name: str, caps: _Caps) -> dict[str, Any]:
     if result:
         _VALUES_CACHE[view_name] = (now, result)
     return result
+
+
+def _warm_values_cache() -> None:
+    started = time.perf_counter()
+    for view_name in VIEWS:
+        try:
+            _get_categorical_values(view_name, _RELAXED_CAPS)
+        except Exception as e:  # a cold cache is the state the pod started in, not a failure
+            logger.warning(f"values cache warm-up failed for {view_name}: {e}")
+    logger.info(
+        f"values cache warm-up done: {len(_VALUES_CACHE)} views in "
+        f"{time.perf_counter() - started:.1f}s"
+    )
 
 
 def _compact_categorical_values(cat_values: dict[str, Any]) -> dict[str, Any]:
@@ -904,8 +939,12 @@ async def health_check():
     return {"status": "healthy"}
 
 
+# The BigQuery handlers are plain `def`: Starlette runs those in its threadpool, so a
+# blocking `.result()` here cannot stall the event loop. As `async def` they did, and a cold
+# /schema held /health and /query for 86 s — long enough for the sandbox's 60 s cap to time
+# out a point lookup and for the liveness probe to kill the pod.
 @app.get("/schema", response_model=SchemaResponse)
-async def get_schema(http_request: Request, table: str | None = None):
+def get_schema(http_request: Request, table: str | None = None):
     """Get database schema information. Optionally filter to a single table."""
     start_time = time.perf_counter()
     caps = _caps_for(http_request)
@@ -1072,7 +1111,7 @@ def _scan_cap_detail(referenced: list, estimated_bytes: int, cap_bytes: int) -> 
 
 
 @app.post("/query", response_model=QueryResponse)
-async def execute_query(request: QueryRequest, http_request: Request):
+def execute_query(request: QueryRequest, http_request: Request):
     """Execute a SQL query against the genetics database."""
     start_time = time.perf_counter()
     sql = request.sql
@@ -1243,7 +1282,7 @@ def _serialize_value(value: Any) -> Any:
 
 
 @app.get("/tables/{table_name}/sample")
-async def get_sample(table_name: str, http_request: Request, limit: int = 10):
+def get_sample(table_name: str, http_request: Request, limit: int = 10):
     """Get sample rows from a table."""
     start_time = time.perf_counter()
     # accept both view names and base table names
@@ -1270,7 +1309,7 @@ async def get_sample(table_name: str, http_request: Request, limit: int = 10):
 
 
 @app.get("/stats")
-async def get_stats(http_request: Request):
+def get_stats(http_request: Request):
     """Get summary statistics for the database."""
     start_time = time.perf_counter()
     stats = {}

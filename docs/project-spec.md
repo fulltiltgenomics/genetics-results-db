@@ -705,7 +705,7 @@ Example:
 }
 ```
 
-Values are computed by querying `SELECT DISTINCT` on each view and cached in-process for one hour. New datasets show up automatically after the cache expires. Whatever the column's BigQuery type, the values (and the parent keys of `allowed_values_by_<col>`) are always rendered as strings in BigQuery's own spelling — a BOOL column enumerates as `["false", "true"]` — so a consumer reads every list the same way, though the column's own type still says whether a value belongs quoted in SQL.
+Values are computed by querying `SELECT DISTINCT` on each view and cached in-process for one hour; a background thread fills the cache at startup so the first `/schema` after a pod start does not pay the scans (40 queries, 86 s measured with BigQuery's result cache cold), and a lock makes concurrent cold callers scan each view once. New datasets show up automatically after the cache expires. The handlers that call BigQuery are plain `def` so Starlette runs them in its threadpool: as `async def` a slow `/schema` or `/query` blocked the event loop, and with it `/health` and every other request. Whatever the column's BigQuery type, the values (and the parent keys of `allowed_values_by_<col>`) are always rendered as strings in BigQuery's own spelling — a BOOL column enumerates as `["false", "true"]` — so a consumer reads every list the same way, though the column's own type still says whether a value belongs quoted in SQL.
 
 ### Logging
 
