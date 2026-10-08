@@ -83,6 +83,10 @@ ABSENT_FROM_RESULTS = {
     # carries expression
     "GTEx_v10": (ALL_PROFILES, "expression is served by results-api only"),
     "HPA_24.1": (ALL_PROFILES, "expression is served by results-api only"),
+    "Open_Targets_QTL_26.09": (
+        ("finngen", "daly"),
+        "registered before its first load_credsets_coloc.sh run; drop a profile once loaded there",
+    ),
     # eQTL Catalogue sub-studies present in the collection metadata whose fine-mapping is not
     # part of the imported release; the other ~840 QTD ids are live. Not profile-scoped:
     # validate() errors when a listed name IS live, and it does not for these.

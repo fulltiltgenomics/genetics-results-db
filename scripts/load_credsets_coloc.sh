@@ -86,6 +86,7 @@ CREDSET_FILES=(
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_atacseq/20251118/FinnGen_ATACseq_202509_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/eqtl_catalogue/r8_gnomad411/eQTL_Catalogue_R8.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/open_targets/202609/Open_Targets_26.09_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/open_targets_qtl/202609/Open_Targets_QTL_26.09_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/pgc_scz_finemap/2022_gnomad411/PGC_SCZ_2022_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/nmr_ukbb_est/2026_gnomad411/nmr_ukbb_est_credible_sets.tsv.gz"
 )
@@ -125,7 +126,7 @@ bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
    WHERE dataset IN ('FinnGen_R14', 'FinnGen_kanta', 'FinnGen_drugs',
                      'FinnGen_Olink', 'FinnGen_Olink_5K', 'FinnGen_SomaScan', 'UKB_PPP',
                      'FinnGen_snRNAseq', 'FinnGen_ATACseq',
-                     'Open_Targets_26.06', 'Open_Targets_26.09',
+                     'Open_Targets_26.06', 'Open_Targets_26.09', 'Open_Targets_QTL_26.09',
                      'PGC_SCZ_2022', 'nmr_ukbb_est')
       OR dataset LIKE 'QTD%'"
 ts "Done"
