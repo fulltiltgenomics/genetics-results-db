@@ -84,8 +84,8 @@ ABSENT_FROM_RESULTS = {
     "GTEx_v10": (ALL_PROFILES, "expression is served by results-api only"),
     "HPA_24.1": (ALL_PROFILES, "expression is served by results-api only"),
     "Open_Targets_QTL_26.09": (
-        ("finngen", "daly"),
-        "registered before its first load_credsets_coloc.sh run; drop a profile once loaded there",
+        ("finngen",),
+        "not staged in finngen-commons, which the daly admin instance cannot reach",
     ),
     # eQTL Catalogue sub-studies present in the collection metadata whose fine-mapping is not
     # part of the imported release; the other ~840 QTD ids are live. Not profile-scoped:
