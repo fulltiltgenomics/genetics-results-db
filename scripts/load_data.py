@@ -415,6 +415,7 @@ SCHEMAS = {
         bigquery.SchemaField("publication_date", "DATE"),
         bigquery.SchemaField("version", "STRING"),
         bigquery.SchemaField("coloc_partner_only", "BOOL", mode="REQUIRED"),
+        bigquery.SchemaField("contributing_cohorts", "STRING", mode="REPEATED"),
     ],
     # `dataset` is NULLABLE on purpose: a registry entry with no BigQuery presence still
     # gets a row. dataset_ids/resource_aliases are REPEATED, so this table is JSON-loaded.

@@ -92,6 +92,7 @@ ABSENT_FROM_RESULTS = {
     "QTD000869": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000910": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000915": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
+    "FinnGen_R14_MVP_UKBB_AOU": (("daly",), "four-cohort meta pseudo credible sets not loaded"),
 }
 
 
@@ -185,6 +186,38 @@ def _finngen_pheweb(items, entry):
             "n_cases": n_cases,
             "n_controls": n_controls,
             "n_samples": None if n_cases is None else n_cases + (n_controls or 0),
+        })
+    return rows
+
+
+def _finngen_meta(items, entry):
+    """FinnGen multi-cohort meta-analysis JSON (FinnGen + MVP + UKBB + AoU).
+
+    Only the presence of `num_controls` marks a trait binary: a quantitative trait carries
+    its whole sample in `num_cases` and has no `num_controls` key, the same rule results-api
+    applies. The contributing cohorts vary per phenotype, so they are carried per row. The file's
+    `cohort_families` is not: it is the prefix of each `contributing_cohorts` entry and adds
+    nothing a query cannot derive. Nor is `n_by_cohort`, whose cohort-keyed map has no
+    columnar shape here; results-api serves it.
+    """
+    rows = []
+    for item in items:
+        n_cases = safe_int(item.get("num_cases"))
+        binary = "num_controls" in item
+        n_controls = safe_int(item.get("num_controls")) if binary else None
+        if binary:
+            n_samples = None if None in (n_cases, n_controls) else n_cases + n_controls
+        else:
+            n_samples = n_cases
+        rows.append({
+            "trait": item.get("phenocode") or "",
+            "trait_name": item.get("name") or None,
+            "trait_type": "binary" if binary else "quantitative",
+            "category": item.get("category") or None,
+            "n_cases": n_cases,
+            "n_controls": n_controls,
+            "n_samples": n_samples,
+            "contributing_cohorts": list(item.get("contributing_cohorts") or []),
         })
     return rows
 
@@ -337,6 +370,7 @@ def _genebass(items, entry):
 # holds a gene id). Routing it through _PHENOTYPE_HARMONIZERS would produce rows that never join.
 _PHENOTYPE_HARMONIZERS = {
     "finngen_r13": _finngen_pheweb,
+    "finngen_meta": _finngen_meta,
     "finngen_kanta": _finngen_kanta,
     "finngen_drugs": _finngen_drugs,
     "quantitative_pheweb": _quantitative_pheweb,
@@ -387,6 +421,8 @@ def build_phenotypes(registry, metadata_by_dataset_id, absent):
                     or parse_date(entry.get("publication_date")),
                     "version": entry.get("version"),
                     "coloc_partner_only": partner_only,
+                    # a REPEATED column cannot be NULL, so a source without one gets []
+                    "contributing_cohorts": row.get("contributing_cohorts") or [],
                 }
                 key = (dataset, row["trait"])  # (dataset, phenocode)
                 existing = by_key.get(key)

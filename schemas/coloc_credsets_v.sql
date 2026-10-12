@@ -4,6 +4,7 @@ SELECT
   *,
   CONCAT(chr, ':', pos, ':', ref, ':', alt) AS variant,
   CASE
+    WHEN LOWER(dataset) LIKE 'finngen%mvp_ukbb_aou%' THEN 'finngen_mvp_ukbb_aou'
     WHEN LOWER(dataset) LIKE 'finngen%mvp_ukbb%' THEN 'finngen_mvp_ukbb'
     WHEN LOWER(dataset) LIKE 'finngen%ukbb%' THEN 'finngen_ukbb'
     WHEN LOWER(dataset) LIKE 'finngen%' THEN 'finngen'

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Load pseudo credible set data from GCS into BigQuery
-# these are FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets,
-# a shared external file bundling COVID-19 HGI, PGC (SCZ/BIP), GP2 (PD) and
+# these are FinnGen+UKBB, FinnGen+MVP+UKBB and FinnGen+MVP+UKBB+AoU meta-analysis pseudo
+# credible sets, a shared external file bundling COVID-19 HGI, PGC (SCZ/BIP), GP2 (PD) and
 # IIBDGC (IBD/UC/CD), and the deCODE 2021 plasma pQTL sets (their own file)
 
 set -euo pipefail
@@ -23,7 +23,21 @@ PSEUDO_CREDSET_FILES=(
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_mvp_ukbb_labs_pseudo/r13/FinnGen_R13_MVP_UKBB_labs_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/ext_pseudo/EXT_20260610_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/decode_pseudo/deCODE_pQTL_2021_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_mvp_ukbb_aou_pseudo/r14/FinnGen_R14_MVP_UKBB_AOU_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
 )
+
+# the delete below is a single statement over every listed dataset, so a file missing later
+# in the list would leave the earlier datasets deleted and unloaded. stderr is left open so
+# an auth failure reads differently from a missing object.
+missing=()
+for gcs_uri in "${PSEUDO_CREDSET_FILES[@]}"; do
+  gsutil -q stat "${gcs_uri}" || missing+=("${gcs_uri}")
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+  ts "ERROR: not found or not readable, nothing deleted:"
+  printf '  %s\n' "${missing[@]}"
+  exit 1
+fi
 
 echo ""
 ts "=== Deleting existing pseudo credible set rows ==="
@@ -31,16 +45,13 @@ bq query --project_id="${PROJECT_ID}" --use_legacy_sql=false \
   "DELETE FROM \`${PROJECT_ID}.${DATASET_ID}.credible_sets\`
    WHERE dataset IN ('FinnGen_R13_UKBB', 'FinnGen_R13_UKBB_labs',
                      'FinnGen_R13_MVP_UKBB', 'FinnGen_R13_MVP_UKBB_labs',
+                     'FinnGen_R14_MVP_UKBB_AOU',
                      'COVID19_HGI', 'PGC', 'GP2', 'IIBDGC', 'deCODE_pQTL_2021')"
 ts "Done"
 
 echo ""
 ts "=== Loading pseudo credible sets ==="
 for gcs_uri in "${PSEUDO_CREDSET_FILES[@]}"; do
-  if ! gsutil -q stat "${gcs_uri}" 2>/dev/null; then
-    ts "ERROR: ${gcs_uri} not found"
-    exit 1
-  fi
   ts "Loading ${gcs_uri}..."
   "$PY" "${SCRIPT_DIR}/load_data.py" \
     --project "${PROJECT_ID}" \

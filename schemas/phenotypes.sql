@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS `genetics_results.phenotypes`
   author STRING OPTIONS(description="Study author; per-study for Open Targets, otherwise the dataset's author"),
   publication_date DATE OPTIONS(description="Publication date; per-study for Open Targets where it is a full date, otherwise the dataset's. NULL rather than invented when the source gives only a year"),
   version STRING OPTIONS(description="Dataset version label, e.g. R14, R12, 26.06"),
-  coloc_partner_only BOOL NOT NULL OPTIONS(description="TRUE when the trait's dataset ships no independently queryable product and exists only as a colocalization partner (FinnGen R12 core and R12 Kanta). Those traits appear in colocalization_v but not in credible_sets_v; results-api's phenotype search index also omits them, so filter them out to mirror it")
+  coloc_partner_only BOOL NOT NULL OPTIONS(description="TRUE when the trait's dataset ships no independently queryable product and exists only as a colocalization partner (FinnGen R12 core and R12 Kanta). Those traits appear in colocalization_v but not in credible_sets_v; results-api's phenotype search index also omits them, so filter them out to mirror it"),
+  contributing_cohorts ARRAY<STRING> OPTIONS(description="Cohorts whose summary statistics entered this trait's meta-analysis, e.g. ['fg', 'ukbb_eur', 'mvp_afr']; set only for multi-cohort meta-analyses whose cohort set varies per trait, empty for every other dataset")
 )
 CLUSTER BY dataset, trait_original
 OPTIONS(

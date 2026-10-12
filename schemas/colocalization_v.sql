@@ -3,6 +3,7 @@ CREATE OR REPLACE VIEW `genetics_results.colocalization_v` AS
 SELECT
   *,
   CASE
+    WHEN LOWER(dataset1) LIKE 'finngen%mvp_ukbb_aou%' THEN 'finngen_mvp_ukbb_aou'
     WHEN LOWER(dataset1) LIKE 'finngen%mvp_ukbb%' THEN 'finngen_mvp_ukbb'
     WHEN LOWER(dataset1) LIKE 'finngen%ukbb%' THEN 'finngen_ukbb'
     WHEN LOWER(dataset1) LIKE 'finngen%' THEN 'finngen'
@@ -17,6 +18,7 @@ SELECT
     ELSE LOWER(dataset1)
   END AS resource1,
   CASE
+    WHEN LOWER(dataset2) LIKE 'finngen%mvp_ukbb_aou%' THEN 'finngen_mvp_ukbb_aou'
     WHEN LOWER(dataset2) LIKE 'finngen%mvp_ukbb%' THEN 'finngen_mvp_ukbb'
     WHEN LOWER(dataset2) LIKE 'finngen%ukbb%' THEN 'finngen_ukbb'
     WHEN LOWER(dataset2) LIKE 'finngen%' THEN 'finngen'

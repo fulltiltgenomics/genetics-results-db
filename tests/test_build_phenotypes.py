@@ -394,3 +394,68 @@ def test_safe_int_treats_na_sentinels_as_missing():
     assert safe_int("-1") is None
     assert safe_int("0") == 0
     assert safe_int("84") == 84
+
+
+ALL_ELEVEN_COHORTS = ["fg", "aou_eur", "aou_afr", "aou_amr", "aou_eas", "aou_sas", "aou_mid",
+                      "ukbb_eur", "mvp_eur", "mvp_afr", "mvp_amr"]
+META_ITEMS = [
+    {"phenocode": "AB1_AMOEBIASIS", "name": "Amoebiasis", "category": "I Infections",
+     "num_cases": 296, "num_controls": 828810, "contributing_cohorts": ["fg", "ukbb_eur"],
+     "cohort_families": ["fg", "ukbb"],
+     "n_by_cohort": {"fg": {"n_cases": 204, "n_controls": 439752},
+                     "ukbb_eur": {"n_cases": 92, "n_controls": 389058}}},
+    # quantitative: the whole sample sits in num_cases and num_controls is absent
+    {"phenocode": "BMI_IRN", "name": "Body mass index", "category": "Quantitative endpoints",
+     "num_cases": 1729159, "contributing_cohorts": ALL_ELEVEN_COHORTS,
+     "cohort_families": ["fg", "aou", "mvp", "ukbb"], "n_by_cohort": {}},
+    {"phenocode": "T2D", "name": "Type 2 diabetes", "category": "IV Endocrine",
+     "num_cases": 500000, "num_controls": 2000000, "contributing_cohorts": ALL_ELEVEN_COHORTS,
+     "cohort_families": ["fg", "aou", "mvp", "ukbb"], "n_by_cohort": {}},
+]
+
+
+def _meta_phenotypes():
+    registry = {"finngen_mvp_ukbb_aou": {
+        "resource": "finngen_mvp_ukbb_aou", "dataset": "FinnGen_R14_MVP_UKBB_AOU",
+        "version": "R14", "trait_type": "mixed",
+        "metadata_file": "gs://x/meta.json", "metadata_harmonizer": "finngen_meta"}}
+    rows, _ = build_phenotypes(registry, {"finngen_mvp_ukbb_aou": META_ITEMS}, ABSENT)
+    return {r["trait_original"]: r for r in rows}
+
+
+def test_finngen_meta_decides_trait_type_on_the_presence_of_num_controls():
+    by_code = _meta_phenotypes()
+    assert by_code["AB1_AMOEBIASIS"]["trait_type"] == "binary"
+    assert by_code["T2D"]["trait_type"] == "binary"
+    assert by_code["BMI_IRN"]["trait_type"] == "quantitative"
+    assert by_code["AB1_AMOEBIASIS"]["trait_name"] == "Amoebiasis"
+    assert by_code["AB1_AMOEBIASIS"]["resource"] == "finngen_mvp_ukbb_aou"
+
+
+def test_finngen_meta_keeps_the_counts_as_the_file_has_them():
+    by_code = _meta_phenotypes()
+    assert (by_code["AB1_AMOEBIASIS"]["n_cases"], by_code["AB1_AMOEBIASIS"]["n_controls"]) == (
+        296, 828810)
+    assert by_code["AB1_AMOEBIASIS"]["n_samples"] == 296 + 828810
+    assert by_code["BMI_IRN"]["n_cases"] == 1729159
+    assert by_code["BMI_IRN"]["n_controls"] is None
+    assert by_code["BMI_IRN"]["n_samples"] == 1729159
+
+
+def test_finngen_meta_passes_contributing_cohorts_through_in_order():
+    by_code = _meta_phenotypes()
+    assert by_code["AB1_AMOEBIASIS"]["contributing_cohorts"] == ["fg", "ukbb_eur"]
+    assert by_code["T2D"]["contributing_cohorts"] == ALL_ELEVEN_COHORTS
+    assert by_code["BMI_IRN"]["contributing_cohorts"] == ALL_ELEVEN_COHORTS
+    assert "cohort_families" not in by_code["T2D"] and "n_by_cohort" not in by_code["T2D"]
+
+
+def test_other_harmonizers_emit_an_empty_contributing_cohorts_not_null():
+    """the column is REPEATED, which BigQuery cannot hold as NULL"""
+    rows, _ = _phenotypes()
+    assert rows and all(r["contributing_cohorts"] == [] for r in rows)
+
+
+def test_four_cohort_meta_is_absent_only_on_daly():
+    assert "FinnGen_R14_MVP_UKBB_AOU" in absent_from_results("daly")
+    assert "FinnGen_R14_MVP_UKBB_AOU" not in absent_from_results("finngen")

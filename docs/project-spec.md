@@ -571,7 +571,7 @@ LEFT JOIN phenotypes_v p USING (dataset, trait_original)
 WHERE cs.chr = 6 AND cs.pos BETWEEN 32000000 AND 33000000
 ```
 
-**Coverage is partial by design.** Only datasets that ship a phenotype metadata file have rows — FinnGen R14/R12/Kanta/drugs, the FinnGen+UKBB and FinnGen+MVP+UKBB meta-analyses, Open Targets GWAS, Genebass, BRaVa, COVID-19 HGI, IIBDGC, the Collins rCNV map, the EstBB-UKBB NMR traits and the deCODE pQTL aptamers (aptamer id to target gene symbol). Other QTL datasets, Open Targets QTL among them, have none (their traits are genes, proteins and peaks, resolved via `gene_annotations` and `peak_to_gene`), and neither do datasets whose codes are already readable (PGC, GP2, BipEx2, SCHEMA2, IBD_exome). Use a `LEFT JOIN` when the dataset is not known in advance. Ranked fuzzy phenotype *search* stays on results-api; this table serves exact resolution and SQL-expressible filtering.
+**Coverage is partial by design.** Only datasets that ship a phenotype metadata file have rows — FinnGen R14/R12/Kanta/drugs, the FinnGen+UKBB, FinnGen+MVP+UKBB and FinnGen+MVP+UKBB+AoU meta-analyses, Open Targets GWAS, Genebass, BRaVa, COVID-19 HGI, IIBDGC, the Collins rCNV map, the EstBB-UKBB NMR traits and the deCODE pQTL aptamers (aptamer id to target gene symbol). Other QTL datasets, Open Targets QTL among them, have none (their traits are genes, proteins and peaks, resolved via `gene_annotations` and `peak_to_gene`), and neither do datasets whose codes are already readable (PGC, GP2, BipEx2, SCHEMA2, IBD_exome). Use a `LEFT JOIN` when the dataset is not known in advance. Ranked fuzzy phenotype *search* stays on results-api; this table serves exact resolution and SQL-expressible filtering.
 
 | Column | Type | Required | Description |
 |---|---|---|---|
@@ -589,6 +589,7 @@ WHERE cs.chr = 6 AND cs.pos BETWEEN 32000000 AND 33000000
 | publication_date | DATE | No | NULL rather than invented when the source gives only a year |
 | version | STRING | No | Dataset version label |
 | coloc_partner_only | BOOL | Yes | TRUE for traits whose dataset exists only as a colocalization partner (FinnGen R12 core and R12 Kanta) |
+| contributing_cohorts | ARRAY<STRING> | No | Cohorts that entered this trait's meta-analysis (`fg`, `ukbb_eur`, `mvp_afr`, ...); set by the `finngen_meta` harmonizer, where the cohort set varies per trait, and empty for every other dataset. The source file's per-cohort counts are not carried — results-api serves them |
 
 ### datasets
 
@@ -987,7 +988,7 @@ genetics-results-db/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_credsets_coloc.sh  # Load credible sets and colocalization data
-│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP meta-analyses, external EXT file: COVID-19 HGI + PGC + GP2 + IIBDGC, deCODE pQTL)
+│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP/AoU meta-analyses, external EXT file: COVID-19 HGI + PGC + GP2 + IIBDGC, deCODE pQTL)
 │   ├── load_genebass_variants.sh    # Load GeneBASS exome variant results (truncates table)
 │   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results, unfiltered per-trait files (truncates table)
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
@@ -1091,7 +1092,7 @@ genetics-results-db/
 
    `CREDSET_FILES` in the script is the list of source objects; the relative layout under `credible_sets/` is the same in both deployments' buckets, so `GCS_BUCKET`/`GCS_PREFIX` are the only per-deployment inputs. A resource re-annotated against a newer gnomAD (`most_severe`/`gene_most_severe` re-stamped, every other column unchanged) is written to a sibling prefix (`<release>_gnomad411/`) rather than over the old objects, so a reload can be compared against the previous table and rolled back by pointing the list back. Open Targets is the exception: its re-annotation coincided with release 26.09, whose `trait` is `<readable name>_(<GCST accession>)` while `trait_original` stays the bare accession, so the phenotypes join (below) is untouched. The pre-load `DELETE` names the superseded `dataset` value next to the new one until the old rows are gone from every deployment.
 
-3. **Load pseudo credible sets** (FinnGen+UKBB and FinnGen+MVP+UKBB meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
+3. **Load pseudo credible sets** (FinnGen+UKBB, FinnGen+MVP+UKBB and FinnGen+MVP+UKBB+AoU meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
    ```bash
    ./scripts/load_pseudo.sh
    ```
