@@ -27,6 +27,7 @@ EXPOSED_VIEWS = {
     "colocalization_v",
     "credible_sets_v",
     "datasets_v",
+    "decode_pqtl_signals_v",
     "dosage_sensitivity_v",
     "exome_gene_bayes_results_v",
     "exome_gene_counts_v",

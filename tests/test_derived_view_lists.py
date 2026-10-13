@@ -52,6 +52,7 @@ MATERIALIZED_VIEWS = {"credible_sets_v"}
 
 CROSS_CHECK_EXCLUDED = {
     "datasets_v",
+    "decode_pqtl_signals_v",
     "dosage_sensitivity_v",
     "gene_annotations_v",
     "gnomad_variant_annotation_v",
