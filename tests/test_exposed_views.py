@@ -23,6 +23,11 @@ from api.yaml_loader import load_views  # noqa: E402
 
 EXPOSED_VIEWS = {
     "asm_qtl_v",
+    "cellxgene_datasets_v",
+    "cellxgene_expression_v",
+    "cellxgene_groups_v",
+    "cellxgene_measured_genes_v",
+    "cellxgene_summary_v",
     "coloc_credsets_v",
     "colocalization_v",
     "credible_sets_v",

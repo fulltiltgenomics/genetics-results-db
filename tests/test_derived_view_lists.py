@@ -51,6 +51,11 @@ LINTED_VIEWS = {
 MATERIALIZED_VIEWS = {"credible_sets_v"}
 
 CROSS_CHECK_EXCLUDED = {
+    "cellxgene_datasets_v",
+    "cellxgene_expression_v",
+    "cellxgene_groups_v",
+    "cellxgene_measured_genes_v",
+    "cellxgene_summary_v",
     "datasets_v",
     "decode_pqtl_signals_v",
     "dosage_sensitivity_v",
