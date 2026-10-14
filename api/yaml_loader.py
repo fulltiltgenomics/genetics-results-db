@@ -81,8 +81,14 @@ def load_collection_resource_prefixes(config: dict[str, Any]) -> dict[str, dict[
     return result
 
 
-def load_views(config: dict[str, Any]) -> list[str]:
+def load_views(config: dict[str, Any], profile: str | None = None) -> list[str]:
     """Build VIEWS from the tables section — the names the API exposes.
+
+    A table carrying `profiles: [...]` is exposed only on the listed profiles; one without
+    the key is on every profile. A `profiles` that is not a list is a malformed gate and
+    hides the table (a string would otherwise substring-match). A `profile` that is None or not defined by the top-level
+    `profiles:` block drops every gated table, so a deployment that forgot CONFIG_PROFILE
+    loses the gated views instead of gaining them.
 
     The `tables` block is a documentation registry first: the sandbox schema docs are
     generated from every entry in it. Reachability is a separate, explicit per-table
@@ -91,7 +97,32 @@ def load_views(config: dict[str, Any]) -> list[str]:
     a field.
     """
     tables = config.get("tables") or {}
-    return [name for name, info in tables.items() if (info or {}).get("exposed") is True]
+    known = profile is not None and profile in (config.get("profiles") or {})
+    return [
+        name for name, info in tables.items()
+        if (info or {}).get("exposed") is True
+        and ("profiles" not in (info or {}) or (
+            known and isinstance(info["profiles"], list) and profile in info["profiles"]))
+    ]
+
+
+def gate_errors(config: dict[str, Any], profile: str | None) -> list[str]:
+    """Reasons some gated table is hidden for reasons other than the profile list excluding it.
+
+    Empty when nothing is wrong; shared by the service and the CI scripts so the same
+    misconfiguration is reported wherever the views are loaded.
+    """
+    problems = []
+    tables = config.get("tables") or {}
+    gated = [n for n, i in tables.items() if "profiles" in (i or {})]
+    if gated and (profile is None or profile not in (config.get("profiles") or {})):
+        problems.append(
+            f"CONFIG_PROFILE {profile!r} is unset or not a profile in datasets.yaml; hiding "
+            f"the profile-gated views: {', '.join(gated)}")
+    bad = [n for n in gated if not isinstance(tables[n]["profiles"], list)]
+    if bad:
+        problems.append(f"`profiles` is not a list on {', '.join(bad)}; hiding them")
+    return problems
 
 
 RESOURCE_DERIVATION_MODES = ("view_case", "load_time", "none")
@@ -196,7 +227,7 @@ def load_categorical_columns(config: dict[str, Any]) -> dict[str, dict[str, str 
     return result
 
 
-def load_all() -> dict[str, Any] | None:
+def load_all(profile: str | None = None) -> dict[str, Any] | None:
     """Load all data structures from YAML. Returns None if YAML is unavailable.
 
     On success returns a dict with keys:
@@ -208,8 +239,11 @@ def load_all() -> dict[str, Any] | None:
     if config is None:
         return None
 
+    for problem in gate_errors(config, profile):
+        logger.error(problem)
+
     return {
-        "views": load_views(config),
+        "views": load_views(config, profile),
         "resource_metadata": load_resource_metadata(config),
         "collection_resource_prefixes": load_collection_resource_prefixes(config),
         "table_descriptions": load_table_descriptions(config),

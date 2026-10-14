@@ -36,6 +36,7 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from api.yaml_loader import (  # noqa: E402
+    gate_errors,
     load_dataset_cross_check_exclusions,
     load_views,
 )
@@ -81,7 +82,10 @@ def views_in_scope(datasets_yaml_path):
             config = yaml.safe_load(handle)
     except (OSError, yaml.YAMLError) as error:
         raise ValueError(f"cannot read {datasets_yaml_path}: {error}") from error
-    views = load_views(config or {})
+    profile = os.environ.get("CONFIG_PROFILE") or None
+    for problem in gate_errors(config or {}, profile):
+        print(f"ERROR: {problem}", file=sys.stderr)
+    views = load_views(config or {}, profile)
     if not views:
         raise ValueError(
             f"no views marked `exposed: true` in {datasets_yaml_path} - the cross-check scope "
