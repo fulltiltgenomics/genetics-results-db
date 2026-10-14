@@ -6,7 +6,8 @@ out in api/main.py. A derivation can widen a set as easily as it can narrow one,
 expected names are written out HERE, in the one place whose job is to disagree with the code.
 Deriving both sides of this assertion would prove nothing.
 
-Adding a view is meant to be `exposed: true` in the config plus a line here.
+Adding a view is meant to be `exposed: true` in the config plus a line here; a view carrying
+`profiles: [...]` goes in GATED_VIEWS under each profile it lists instead.
 """
 
 import os
@@ -23,11 +24,6 @@ from api.yaml_loader import load_views  # noqa: E402
 
 EXPOSED_VIEWS = {
     "asm_qtl_v",
-    "cellxgene_datasets_v",
-    "cellxgene_expression_v",
-    "cellxgene_groups_v",
-    "cellxgene_measured_genes_v",
-    "cellxgene_summary_v",
     "coloc_credsets_v",
     "colocalization_v",
     "credible_sets_v",
@@ -53,36 +49,58 @@ EXPOSED_VIEWS = {
     "variant_effect_v",
 }
 
+GATED_VIEWS = {
+    "daly": {
+        "cellxgene_datasets_v",
+        "cellxgene_expression_v",
+        "cellxgene_groups_v",
+        "cellxgene_measured_genes_v",
+        "cellxgene_summary_v",
+    },
+}
+
 DATASETS_YAML = os.path.join(os.path.dirname(__file__), "..", "configs", "datasets.yaml")
 
 
-@pytest.fixture(scope="module")
+# None stands for an unset CONFIG_PROFILE, which must hide every gated view
+PROFILES = ["daly", "finngen", None]
+
+
+def _expected(profile):
+    return EXPOSED_VIEWS | GATED_VIEWS.get(profile, set())
+
+
+@pytest.fixture(scope="module", params=PROFILES, ids=lambda p: p or "unset")
 def main(request):
     patcher = pytest.MonkeyPatch()
     request.addfinalizer(patcher.undo)
-    return _reload(patcher, INTERNAL_API_SECRET="test-secret")
+    patcher.delenv("CONFIG_PROFILE", raising=False)
+    module = _reload(patcher, INTERNAL_API_SECRET="test-secret", CONFIG_PROFILE=request.param)
+    module.expected_views = _expected(request.param)
+    return module
 
 
-def test_config_exposes_exactly_these_views():
+@pytest.mark.parametrize("profile", PROFILES, ids=lambda p: p or "unset")
+def test_config_exposes_exactly_these_views(profile):
     with open(DATASETS_YAML) as handle:
-        views = load_views(yaml.safe_load(handle))
+        views = load_views(yaml.safe_load(handle), profile)
     assert len(views) == len(set(views))
-    assert set(views) == EXPOSED_VIEWS
+    assert set(views) == _expected(profile)
 
 
 def test_views_is_exactly_the_exposed_set(main):
     assert len(main.VIEWS) == len(set(main.VIEWS))
-    assert set(main.VIEWS) == EXPOSED_VIEWS
+    assert set(main.VIEWS) == main.expected_views
 
 
 def test_base_table_aliases_still_derive_from_views(main):
-    assert set(main._BASE_TABLES) == {v.removesuffix("_v") for v in EXPOSED_VIEWS}
-    assert set(main._BASE_TABLES.values()) == EXPOSED_VIEWS
+    assert set(main._BASE_TABLES) == {v.removesuffix("_v") for v in main.expected_views}
+    assert set(main._BASE_TABLES.values()) == main.expected_views
 
 
 def test_query_allow_list_is_neither_wider_nor_narrower(main):
     """_ALLOWED_TABLE_IDS is what /query checks the dry run's referenced tables against."""
     prefix = f"{main.PROJECT_ID}.{main.DATASET_ID}."
-    expected = {prefix + name for name in EXPOSED_VIEWS}
-    expected |= {prefix + name.removesuffix("_v") for name in EXPOSED_VIEWS}
+    expected = {prefix + name for name in main.expected_views}
+    expected |= {prefix + name.removesuffix("_v") for name in main.expected_views}
     assert set(main._ALLOWED_TABLE_IDS) == expected
