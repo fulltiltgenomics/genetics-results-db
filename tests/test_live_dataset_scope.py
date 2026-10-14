@@ -9,6 +9,7 @@ import os
 import sys
 
 import pytest
+import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
@@ -71,9 +72,17 @@ def test_self_referential_views_are_excluded():
     assert "datasets_v" in EXCLUDED
 
 
-def test_every_excluded_view_is_actually_exposed():
-    """An exclusion for a view that no longer exists is dead weight that hides the next one."""
-    assert set(EXCLUDED) <= set(views_in_scope(DATASETS_YAML))
+def test_every_excluded_view_is_actually_exposed(monkeypatch):
+    """An exclusion for a view that no longer exists is dead weight that hides the next one.
+
+    A view gated to some profiles still exists, so it counts if any profile exposes it."""
+    with open(DATASETS_YAML) as handle:
+        profiles = yaml.safe_load(handle)["profiles"]
+    in_scope = set()
+    for profile in profiles:
+        monkeypatch.setenv("CONFIG_PROFILE", profile)
+        in_scope |= set(views_in_scope(DATASETS_YAML))
+    assert set(EXCLUDED) <= in_scope
 
 
 def test_missing_dataset_column_fails_loudly_rather_than_being_skipped():
