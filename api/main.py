@@ -545,7 +545,7 @@ try:
 except ImportError:
     from yaml_loader import load_all as _load_yaml_config
 
-_yaml_config = _load_yaml_config()
+_yaml_config = _load_yaml_config(os.environ.get("CONFIG_PROFILE") or None)
 if _yaml_config is None:
     raise RuntimeError(
         "datasets.yaml could not be loaded. Set DATASETS_CONFIG_PATH or "
@@ -1326,25 +1326,26 @@ def get_stats(http_request: Request):
             stats[f"{view}_rows"] = None
 
     # credible sets breakdown
-    try:
-        sql = f"""
-        SELECT
-            dataset,
-            data_type,
-            COUNT(*) as count
-        FROM `{PROJECT_ID}.{DATASET_ID}.credible_sets_v`
-        GROUP BY dataset, data_type
-        ORDER BY count DESC
-        """
-        results = _run_internal_query(sql, _caps_for(http_request)).result()
-        stats["credible_sets_by_source"] = [
-            {"dataset": row.dataset, "data_type": row.data_type, "count": row.count}
-            for row in results
-        ]
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"Could not get credible sets breakdown: {e}")
+    if "credible_sets_v" in VIEWS:
+        try:
+            sql = f"""
+            SELECT
+                dataset,
+                data_type,
+                COUNT(*) as count
+            FROM `{PROJECT_ID}.{DATASET_ID}.credible_sets_v`
+            GROUP BY dataset, data_type
+            ORDER BY count DESC
+            """
+            results = _run_internal_query(sql, _caps_for(http_request)).result()
+            stats["credible_sets_by_source"] = [
+                {"dataset": row.dataset, "data_type": row.data_type, "count": row.count}
+                for row in results
+            ]
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not get credible sets breakdown: {e}")
 
     logger.info({
         "message": "stats",
