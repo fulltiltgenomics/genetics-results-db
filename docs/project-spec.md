@@ -30,6 +30,7 @@ GCS (tsv.gz files)
 BigQuery Dataset
   ├── credible_sets (partitioned by chr, clustered by data_type, resource, variant, pos)
   │   └── credible_sets_v (view: adds maf; variant and resource are stored columns)
+  │   └── decode_pqtl_signals_v (view: one row per deCODE pQTL set, flags the strongest lead per ±2 Mb; no base table)
   ├── colocalization (partitioned by chr, clustered by dataset pairs)
   │   └── colocalization_v (view: adds resource columns)
   ├── coloc_credsets (partitioned by chr, clustered by dataset, data_type)
@@ -121,6 +122,15 @@ See [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md).
 | maf | FLOAT64 | No | Minor allele frequency (view only, derived as LEAST(aaf, 1-aaf)) |
 | most_severe | STRING | No | Most severe variant consequence |
 | gene_most_severe | STRING | No | Gene with most severe consequence |
+
+### decode_pqtl_signals_v
+
+A view with no base table: one row per deCODE pQTL pseudo credible set in `credible_sets`, with the set's lead variant and whether it is the strongest lead of its aptamer within ±2 Mb (`window_top`). Definition and rationale: `schemas/decode_pqtl_signals_v.sql`. What a caller needs to know:
+
+- **Count signals with `WHERE window_top`.** The pseudo credible sets were LD-clumped against the Finnish panel, which leaves the LD shadow of a strong pQTL as many sets of its own. A set that is not a window top names the stronger lead it sits next to (`stronger_cs_id`, `stronger_mlog10p`, `stronger_distance`).
+- **A window top is not proof of independence either.** Shadows of the very strongest cis-pQTLs extend past 2 Mb, so their outermost sets can still be window tops.
+- **Join back to the variants** on `(dataset, trait_original, cs_id)` against `credible_sets_v`.
+- Each query scans the deCODE rows of `credible_sets` (about 1.1 GB). `/schema` reports 0 rows and `/stats` reports no count for this view, because both read row counts from a base table.
 
 ### colocalization
 
@@ -938,6 +948,7 @@ genetics-results-db/
 ├── schemas/
 │   ├── credible_sets.sql      # BigQuery table definition
 │   ├── credible_sets_v.sql    # View with variant and resource columns
+│   ├── decode_pqtl_signals_v.sql      # View: deCODE pQTL sets with the ±2 Mb strongest-lead flag (no base table)
 │   ├── colocalization.sql     # BigQuery table definition
 │   ├── colocalization_v.sql   # View with resource columns
 │   ├── coloc_credsets.sql     # BigQuery table definition

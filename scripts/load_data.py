@@ -13,10 +13,16 @@ into the target table with the constants filled in. The flag is repeatable.
 The same staging indirection also materialises DERIVED_COLUMNS: columns that are
 computed from other columns of the same row and are likewise absent from the source
 TSV (see `credible_sets.variant` / `credible_sets.resource`).
+
+`--transaction SPEC.json` replaces several tables all-or-none: every file is staged and
+counted first, then one multi-statement transaction DELETEs and re-INSERTs every target.
 """
 
 import argparse
+import datetime
+import json
 import os
+import signal
 import sys
 import uuid
 
@@ -610,6 +616,101 @@ SCHEMAS = {
         bigquery.SchemaField("mlog10p_secondary", "FLOAT64"),
         bigquery.SchemaField("mlog10_fdr_q_secondary", "FLOAT64"),
     ],
+    # CELLxGENE release tables, one per file under <release>/bq/ as written by
+    # genetics-results-munge scripts/cellxgene/publish.py, whose *_COLUMNS constants are the
+    # positional layout. The keys are release-local, so these tables are only ever replaced
+    # together (scripts/load_cellxgene.sh, --transaction).
+    "cellxgene_summary": [
+        bigquery.SchemaField("gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene_start", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene_end", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene_name", "STRING"),
+        bigquery.SchemaField("source_gene_ids", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cell_type_rollup_ontology_term_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("cell_type_rollup", "STRING"),
+        bigquery.SchemaField("tissue_general_ontology_term_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("tissue_general", "STRING"),
+        bigquery.SchemaField("n_cells", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_donors", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_datasets", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("mean_log1p_cp10k", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("frac_expressing", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("donor_pseudobulk_mean_cp10k", "FLOAT64"),
+        bigquery.SchemaField("donor_pseudobulk_n_donors", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("tau", "FLOAT64"),
+    ],
+    "cellxgene_expression": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene_start", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("gene_name", "STRING"),
+        bigquery.SchemaField("dataset_key", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("group_key", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("mean_log1p_cp10k", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("frac_expressing", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("donor_pseudobulk_mean_cp10k", "FLOAT64"),
+    ],
+    "cellxgene_groups": [
+        bigquery.SchemaField("group_key", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("dataset_key", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("dataset_version_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("dataset_id", "STRING"),
+        bigquery.SchemaField("tissue_ontology_term_id", "STRING"),
+        bigquery.SchemaField("tissue", "STRING"),
+        bigquery.SchemaField("tissue_type", "STRING"),
+        bigquery.SchemaField("tissue_general_ontology_term_id", "STRING"),
+        bigquery.SchemaField("tissue_general", "STRING"),
+        bigquery.SchemaField("cell_type_ontology_term_id", "STRING"),
+        bigquery.SchemaField("cell_type", "STRING"),
+        bigquery.SchemaField("cell_type_rollup_ontology_term_id", "STRING"),
+        bigquery.SchemaField("cell_type_rollup", "STRING"),
+        bigquery.SchemaField("disease_ontology_term_id", "STRING"),
+        bigquery.SchemaField("disease", "STRING"),
+        bigquery.SchemaField("assay_ontology_term_id", "STRING"),
+        bigquery.SchemaField("assay", "STRING"),
+        bigquery.SchemaField("suspension_type", "STRING"),
+        bigquery.SchemaField("spatial", "BOOL"),
+        bigquery.SchemaField("n_cells", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_donors", "INT64", mode="REQUIRED"),
+    ],
+    # `release`, `min_cells` and `min_donors` are not in the file: scripts/load_cellxgene.sh
+    # injects them from the manifest as const columns, so they commit with the rows
+    "cellxgene_datasets": [
+        bigquery.SchemaField("dataset_key", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("dataset_id", "STRING"),
+        bigquery.SchemaField("dataset_version_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("collection_id", "STRING"),
+        bigquery.SchemaField("collection_name", "STRING"),
+        bigquery.SchemaField("title", "STRING"),
+        bigquery.SchemaField("collection_doi", "STRING"),
+        bigquery.SchemaField("citation", "STRING"),
+        bigquery.SchemaField("cells_kept", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_groups", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_genes", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_genes_measured", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("n_genes_mapped", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("release", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("min_cells", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("min_donors", "INT64", mode="REQUIRED"),
+    ],
+    "cellxgene_measured_genes": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene_start", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("gene_name", "STRING"),
+        bigquery.SchemaField("dataset_key", "INT64", mode="REQUIRED"),
+    ],
+}
+
+# tables whose source writes NULL as an empty field rather than NA. A custom null marker
+# makes BigQuery refuse an empty non-STRING field, so these keep the CSV default instead.
+EMPTY_NULL_TABLES = {
+    "cellxgene_summary",
+    "cellxgene_expression",
+    "cellxgene_groups",
+    "cellxgene_datasets",
+    "cellxgene_measured_genes",
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
@@ -765,12 +866,76 @@ def _csv_load_config(table_type: str, schema, skip_leading_rows: int, write_disp
         skip_leading_rows=skip_leading_rows,
         write_disposition=write_disposition,
         allow_quoted_newlines=True,
-        null_marker="NA",
     )
+    if table_type not in EMPTY_NULL_TABLES:
+        config.null_marker = "NA"
     if table_type in UNQUOTED_TABLES:
         config.quote_character = ""
         config.allow_quoted_newlines = False
     return config
+
+
+def _staging_schema(table_type: str, const_columns: dict) -> list:
+    """The target schema as the source file lays it out: injected const and derived columns
+    dropped, chr-string and JSON-array columns staged as the raw STRING."""
+    derived_columns = DERIVED_COLUMNS.get(table_type, {})
+    json_array_columns = JSON_ARRAY_COLUMNS.get(table_type, set())
+    staging_schema = []
+    for f in SCHEMAS[table_type]:
+        if f.name in const_columns or f.name in derived_columns:
+            continue
+        if table_type in CHR_STRING_TABLES and f.name == "chr":
+            staging_schema.append(bigquery.SchemaField("chr", "STRING"))
+        elif f.name in json_array_columns:
+            staging_schema.append(bigquery.SchemaField(f.name, "STRING"))
+        else:
+            staging_schema.append(f)
+    return staging_schema
+
+
+def _insert_sql(table_type: str, table_id: str, staging_id: str, const_columns: dict,
+                param_prefix: str = "const_"):
+    """INSERT projecting the staging table into the target, constants filled in.
+
+    DML into the existing table, not a query job with destination=table_id: a
+    destination-table WRITE_TRUNCATE replaces the table's schema with the query's
+    result schema, silently dropping every NOT NULL mode and column description.
+    An INSERT keeps the committed DDL and has BigQuery enforce NOT NULL on the
+    loaded rows. `param_prefix` keeps parameter names apart when several of these
+    share one script.
+    """
+    full_schema = SCHEMAS[table_type]
+    derived_columns = DERIVED_COLUMNS.get(table_type, {})
+    json_array_columns = JSON_ARRAY_COLUMNS.get(table_type, set())
+    col_exprs = []
+    params = []
+    for f in full_schema:
+        if f.name in const_columns:
+            pname = f"{param_prefix}{f.name}"
+            py_value = _coerce_const(const_columns[f.name], f.field_type)
+            col_exprs.append(f"@{pname} AS `{f.name}`")
+            params.append(bigquery.ScalarQueryParameter(pname, f.field_type, py_value))
+        elif f.name in derived_columns:
+            expr = derived_columns[f.name]
+            if callable(expr):
+                expr = expr()
+            col_exprs.append(f"({expr}) AS `{f.name}`")
+        elif table_type in CHR_STRING_TABLES and f.name == "chr":
+            col_exprs.append(CHR_STRING_TO_INT_SQL.format(col="`chr`") + " AS `chr`")
+        elif f.name in json_array_columns:
+            col_exprs.append(f"{json_array_projection_sql(f)} AS `{f.name}`")
+        elif table_type in CELL_TYPE_PREFIX_TABLES and f.name == "cell_type":
+            col_exprs.append(
+                CELL_TYPE_STRIP_PREFIX_SQL.format(col="`cell_type`") + " AS `cell_type`"
+            )
+        else:
+            col_exprs.append(f"`{f.name}`")
+    columns = ", ".join(f"`{f.name}`" for f in full_schema)
+    sql = (
+        f"INSERT INTO `{table_id}` ({columns})\n"
+        f"SELECT {', '.join(col_exprs)} FROM `{staging_id}`"
+    )
+    return sql, params
 
 
 def load_table(
@@ -892,18 +1057,7 @@ def load_table(
             f"--const-column references columns not in schema '{table_type}': {unknown}"
         )
 
-    # build the staging schema: drop injected const columns, and stage any
-    # chr-string column as STRING so it can be regex-converted on projection
-    staging_schema = []
-    for f in full_schema:
-        if f.name in const_columns or f.name in derived_columns:
-            continue
-        if convert_chr and f.name == "chr":
-            staging_schema.append(bigquery.SchemaField("chr", "STRING"))
-        elif f.name in json_array_columns:
-            staging_schema.append(bigquery.SchemaField(f.name, "STRING"))
-        else:
-            staging_schema.append(f)
+    staging_schema = _staging_schema(table_type, const_columns)
     staging_id = f"{table_id}__staging_{uuid.uuid4().hex[:8]}"
 
     try:
@@ -963,42 +1117,7 @@ def load_table(
                         f"{count} staged rows from {gcs_uri} {reason}: {table_id} left untouched"
                     )
 
-        # project staging into the target with constants filled in
-        col_exprs = []
-        params = []
-        for f in full_schema:
-            if f.name in const_columns:
-                pname = f"const_{f.name}"
-                py_value = _coerce_const(const_columns[f.name], f.field_type)
-                col_exprs.append(f"@{pname} AS `{f.name}`")
-                params.append(bigquery.ScalarQueryParameter(pname, f.field_type, py_value))
-            elif f.name in derived_columns:
-                expr = derived_columns[f.name]
-                if callable(expr):
-                    expr = expr()
-                col_exprs.append(f"({expr}) AS `{f.name}`")
-            elif convert_chr and f.name == "chr":
-                col_exprs.append(CHR_STRING_TO_INT_SQL.format(col="`chr`") + " AS `chr`")
-            elif f.name in json_array_columns:
-                col_exprs.append(f"{json_array_projection_sql(f)} AS `{f.name}`")
-            elif strip_cell_type_prefix and f.name == "cell_type":
-                col_exprs.append(
-                    CELL_TYPE_STRIP_PREFIX_SQL.format(col="`cell_type`")
-                    + " AS `cell_type`"
-                )
-            else:
-                col_exprs.append(f"`{f.name}`")
-
-        # DML into the existing table, not a query job with destination=table_id: a
-        # destination-table WRITE_TRUNCATE replaces the table's schema with the query's
-        # result schema, silently dropping every NOT NULL mode and column description.
-        # An INSERT keeps the committed DDL and has BigQuery enforce NOT NULL on the
-        # loaded rows.
-        columns = ", ".join(f"`{f.name}`" for f in full_schema)
-        sql = (
-            f"INSERT INTO `{table_id}` ({columns})\n"
-            f"SELECT {', '.join(col_exprs)} FROM `{staging_id}`"
-        )
+        sql, params = _insert_sql(table_type, table_id, staging_id, const_columns)
         query_config = bigquery.QueryJobConfig(query_parameters=params)
         annotations = [f"{k}={v!r}" for k, v in const_columns.items()]
         annotations += [f"computed {name}" for name in derived_columns]
@@ -1020,13 +1139,184 @@ def load_table(
         print(f"  dropped staging {staging_id}")
 
 
+# a staging table outlives a run only when the process is killed outright (SIGKILL, a lost VM);
+# the expiry bounds what that leaves behind
+STAGING_EXPIRY = datetime.timedelta(hours=24)
+
+# source header spellings that differ from the column name, for the header check
+HEADER_ALIASES = {
+    "cellxgene_summary": {"chr": "chrom"},
+    "cellxgene_expression": {"chr": "chrom"},
+    "cellxgene_measured_genes": {"chr": "chrom"},
+}
+
+
+def read_gcs_header(uri: str) -> list[str]:
+    """The first line of a gs:// file, split on tabs; gzip is detected by its magic bytes.
+    Reads a 64 KiB prefix, not the file."""
+    import zlib
+    from urllib.parse import quote
+
+    import google.auth
+    from google.auth.transport.requests import AuthorizedSession
+
+    bucket, name = uri.removeprefix("gs://").split("/", 1)
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/devstorage.read_only"])
+    r = AuthorizedSession(creds).get(
+        f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{quote(name, safe='')}",
+        params={"alt": "media"}, headers={"Range": "bytes=0-65535"}, timeout=60)
+    r.raise_for_status()
+    data = r.content
+    if data[:2] == b"\x1f\x8b":
+        data = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data)
+    return data.split(b"\n", 1)[0].decode().rstrip("\r").split("\t")
+
+
+def load_tables_transactional(client: bigquery.Client, loads: list[dict], skip_leading_rows: int = 1,
+                              read_header=None):
+    """Replace every target in `loads` with its file(s), all or none, so a reader never sees a
+    half-loaded release or one table from the old release joined to another from the new.
+
+    Each load is {"table_id", "table_type", "gcs_uri" (one URI or a list of shards),
+    "expect_rows"?, "const_columns"?}. Before anything is staged, every file's header row must
+    equal the staged columns in order: the load itself maps columns by position, so a swapped
+    or extra column would otherwise load silently. Then every file is staged, and a staging
+    failure or a row count other than `expect_rows` stops the run with no target touched.
+    Last, one multi-statement transaction DELETEs each target and INSERTs its staged rows; it
+    re-counts each target before COMMIT, and any error rolls the whole transaction back.
+    On any exit, in-flight jobs are cancelled (best effort) and staging tables dropped.
+    Returns {table_id: rows}.
+    """
+    read_header = read_header or read_gcs_header
+    ids = [ld["table_id"] for ld in loads]
+    if not loads or len(set(ids)) != len(ids):
+        raise ValueError(f"a transaction needs distinct target tables, got {ids}")
+    for ld in loads:
+        t = ld["table_type"]
+        if t not in SCHEMAS:
+            raise ValueError(f"Unknown table type: {t}. Must be one of {list(SCHEMAS.keys())}")
+        if t in JSON_SCHEMAS or t in JSON_ARRAY_COLUMNS:
+            # their refusals and JSON staging are wired into load_table only
+            raise ValueError(f"table '{t}' cannot be loaded in a transaction")
+        unknown = sorted(set(ld.get("const_columns") or {}) - {f.name for f in SCHEMAS[t]})
+        if unknown:
+            raise ValueError(f"--const-column references columns not in schema '{t}': {unknown}")
+        if isinstance(ld["gcs_uri"], str):
+            ld["gcs_uri"] = [ld["gcs_uri"]]
+        try:
+            client.get_table(ld["table_id"])
+        except NotFound:
+            raise RuntimeError(
+                f"target table {ld['table_id']} does not exist: create it with "
+                f"scripts/setup_bigquery.sh first"
+            ) from None
+
+    if skip_leading_rows == 1:
+        for ld in loads:
+            t = ld["table_type"]
+            aliases = HEADER_ALIASES.get(t, {})
+            want = [aliases.get(f.name, f.name) for f in _staging_schema(t, ld.get("const_columns") or {})]
+            for uri in ld["gcs_uri"]:
+                got = read_header(uri)
+                if got != want:
+                    raise RuntimeError(
+                        f"{uri} header {got} is not {want} (columns load by position): "
+                        f"no table touched"
+                    )
+
+    staged, inflight = [], []
+
+    def run(job):
+        inflight.append(job)
+        job.result()
+        inflight.remove(job)
+        return job
+
+    try:
+        expires = datetime.datetime.now(datetime.timezone.utc) + STAGING_EXPIRY
+        for ld in loads:
+            t, consts = ld["table_type"], ld.get("const_columns") or {}
+            schema = _staging_schema(t, consts)
+            staging = bigquery.Table(f"{ld['table_id']}__staging_{uuid.uuid4().hex[:8]}", schema=schema)
+            staging.expires = expires
+            client.create_table(staging)
+            staged.append(staging.reference)
+            config = _csv_load_config(t, schema, skip_leading_rows, WriteDisposition.WRITE_APPEND)
+            print(f"Loading {len(ld['gcs_uri'])} file(s) from {ld['gcs_uri'][0]} into staging {staging.table_id}...")
+            job = run(client.load_table_from_uri(ld["gcs_uri"], staging.reference, job_config=config))
+            ld["staged_rows"] = job.output_rows
+            print(f"  staged {job.output_rows} rows")
+            if ld.get("expect_rows") is not None and job.output_rows != ld["expect_rows"]:
+                raise RuntimeError(
+                    f"staged {job.output_rows} rows from {ld['gcs_uri'][0]}..., expected "
+                    f"{ld['expect_rows']}: no table touched"
+                )
+
+        statements, params = [], []
+        for i, (ld, ref) in enumerate(zip(loads, staged)):
+            sql, p = _insert_sql(
+                ld["table_type"], ld["table_id"], f"{ref.project}.{ref.dataset_id}.{ref.table_id}",
+                ld.get("const_columns") or {}, param_prefix=f"t{i}_",
+            )
+            params += p
+            statements += [f"DELETE FROM `{ld['table_id']}` WHERE TRUE", sql]
+        for ld in loads:
+            # inside the transaction a COUNT sees its own writes, so a short INSERT rolls
+            # everything back instead of being reported after the commit
+            statements.append(
+                f"IF (SELECT COUNT(*) FROM `{ld['table_id']}`) != {int(ld['staged_rows'])} THEN "
+                f"RAISE USING MESSAGE = '{ld['table_id']} does not hold the "
+                f"{int(ld['staged_rows'])} staged rows'; END IF"
+            )
+        body = ";\n  ".join(statements)
+        script = (
+            "BEGIN\n"
+            "  BEGIN TRANSACTION;\n"
+            f"  {body};\n"
+            "  COMMIT TRANSACTION;\n"
+            "EXCEPTION WHEN ERROR THEN\n"
+            "  ROLLBACK TRANSACTION;\n"
+            "  RAISE USING MESSAGE = @@error.message;\n"
+            "END;"
+        )
+        print(f"Replacing {', '.join(ids)} in one transaction...")
+        # once submitted, the script runs server-side: a kill here cancels it best effort, but
+        # if the COMMIT has already gone through the tables hold the new release while the
+        # caller saw a failure (no CURRENT flip), so BigQuery can be ahead of CURRENT until
+        # the next successful run
+        run(client.query(script, job_config=bigquery.QueryJobConfig(query_parameters=params)))
+        return {ld["table_id"]: ld["staged_rows"] for ld in loads}
+    finally:
+        for job in inflight:
+            try:
+                job.cancel()
+                print(f"  cancelled {job.job_id}")
+            except Exception as e:  # noqa: BLE001  best effort on the way out
+                print(f"  could not cancel {getattr(job, 'job_id', job)}: {e}")
+        for ref in staged:
+            client.delete_table(ref, not_found_ok=True)
+            print(f"  dropped staging {ref.table_id}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Load genetics data from GCS into BigQuery")
     parser.add_argument("--project", required=True, help="GCP project ID")
     parser.add_argument("--dataset", default="genetics_results", help="BigQuery dataset ID")
-    parser.add_argument("--table", required=True, help="Target table")
+    parser.add_argument("--table", help="Target table")
     parser.add_argument("--schema", choices=list(SCHEMAS.keys()), help="Schema key (defaults to --table value)")
-    parser.add_argument("--gcs-uri", required=True, help="GCS URI (gs://bucket/path/*.tsv.gz)")
+    parser.add_argument("--gcs-uri", help="GCS URI (gs://bucket/path/*.tsv.gz)")
+    parser.add_argument(
+        "--transaction",
+        metavar="SPEC.json",
+        help=(
+            "Replace several tables all-or-none instead of loading one: a JSON list of "
+            '{"table", "gcs_uri", "schema"?, "expect_rows"?, "const_columns"?: {NAME: VALUE}}. '
+            "Every file is staged and counted first, then each target's rows are DELETEd and "
+            "the staged rows INSERTed in one multi-statement transaction. `-` reads stdin; "
+            "`gcs_uri` may be a list of shards. Excludes --table, "
+            "--gcs-uri and the single-table options."
+        ),
+    )
     parser.add_argument(
         "--write-disposition",
         default="WRITE_APPEND",
@@ -1065,6 +1355,41 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.transaction:
+        if args.table or args.gcs_uri or args.schema or args.const_column or args.replace_chr is not None \
+                or args.expect_rows is not None or args.write_disposition != "WRITE_APPEND":
+            parser.error("--transaction takes every table from its spec; drop the single-table options")
+        if args.transaction == "-":
+            spec = json.load(sys.stdin)
+        else:
+            with open(args.transaction) as fh:
+                spec = json.load(fh)
+        loads = [
+            {
+                "table_id": f"{args.project}.{args.dataset}.{e['table']}",
+                "table_type": e.get("schema", e["table"]),
+                "gcs_uri": e["gcs_uri"],
+                "expect_rows": e.get("expect_rows"),
+                "const_columns": {k: str(v) for k, v in (e.get("const_columns") or {}).items()},
+            }
+            for e in spec
+        ]
+        client = bigquery.Client(project=args.project)
+        # SIGTERM (the driver's own SIGTERM, a cancelled Batch job) unwinds through the
+        # finally that cancels in-flight jobs and drops the staging tables
+        signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
+        try:
+            rows = load_tables_transactional(client, loads, args.skip_rows)
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            sys.exit(1)
+        for table_id, n in rows.items():
+            print(f"Loaded {n} rows into {table_id}")
+        return
+
+    if not args.table or not args.gcs_uri:
+        parser.error("--table and --gcs-uri are required (or --transaction)")
 
     const_columns: dict[str, str] = {}
     for spec in args.const_column:

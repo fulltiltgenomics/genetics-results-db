@@ -198,6 +198,7 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 `/tables/{name}/sample`.
 
 - **credible_sets** — fine-mapped credible set variants (FinnGen, Open Targets, eQTL Catalogue)
+- **decode_pqtl_signals_v** — view only, no base table: one row per deCODE pQTL pseudo credible set, with `window_top` flagging the strongest lead of its aptamer within ±2 Mb (count signals with it, not with raw sets)
 - **colocalization** — colocalization analysis results between datasets
 - **coloc_credsets** — variants in colocalized credible sets
 - **exome_variant_results** — exome variant associations (Genebass, IBD exome)
