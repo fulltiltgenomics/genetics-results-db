@@ -1,5 +1,6 @@
-"""A table with `profiles: [...]` is exposed only on those profiles; master's real yaml gates
-nothing, so the behaviour is pinned against a small fixture."""
+"""A table with `profiles: [...]` is exposed only on those profiles. The behaviour is pinned
+against a small fixture so it does not depend on which views the real yaml gates; those are
+pinned by name in test_exposed_views.py."""
 
 import logging
 import os
