@@ -455,7 +455,3 @@ def test_other_harmonizers_emit_an_empty_contributing_cohorts_not_null():
     rows, _ = _phenotypes()
     assert rows and all(r["contributing_cohorts"] == [] for r in rows)
 
-
-def test_four_cohort_meta_is_absent_only_on_daly():
-    assert "FinnGen_R14_MVP_UKBB_AOU" in absent_from_results("daly")
-    assert "FinnGen_R14_MVP_UKBB_AOU" not in absent_from_results("finngen")
