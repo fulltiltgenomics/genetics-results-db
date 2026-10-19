@@ -92,7 +92,6 @@ ABSENT_FROM_RESULTS = {
     "QTD000869": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000910": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
     "QTD000915": (ALL_PROFILES, "eQTL Catalogue sub-study not in the imported release"),
-    "FinnGen_R14_MVP_UKBB_AOU": (("daly",), "four-cohort meta pseudo credible sets not loaded"),
 }
 
 

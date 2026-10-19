@@ -627,6 +627,28 @@ Dataset registry: what every `dataset` value appearing in the results views actu
 | collection | BOOL | Yes | TRUE for a collection whose sub-studies carry `subdataset_of` = its `dataset_id` |
 | subdataset_of | STRING | No | Parent collection's `dataset_id` for sub-studies (QTD ids under `eqtl_catalogue`) |
 
+### cellxgene_* (single-cell expression by cell type)
+
+The BigQuery side of the suite's CELLxGENE product (daly only; the pipeline is
+genetics-results-munge `scripts/cellxgene/`, the product as a whole is described in the suite's
+`docs/project-spec.md`). Columns and their meaning: `schemas/cellxgene_*.sql`, one base table
+and one view each. Two things differ from every other table here:
+
+- **Replaced as a set, never per table.** `dataset_key` and `group_key` are release-local
+  integers, so a reader joining a table from one release to a table from the next would get wrong
+  labels rather than an error. `scripts/load_cellxgene.sh <release_uri>` therefore stages every
+  file of a release, checks each staged row count against the release's `manifest.json`, and
+  replaces all the tables in one multi-statement transaction (`load_data.py --transaction`);
+  any failure leaves the previous release in place.
+- **The served release is queryable.** The loader writes the release name into
+  `cellxgene_datasets.release` in the same transaction, so `SELECT DISTINCT release FROM
+  cellxgene_datasets` is what BigQuery serves; the suite's monitor compares it with the bucket's
+  `releases/CURRENT`.
+
+The loader is run by the pipeline's driver, inside the cellxgene image (which copies it in), after
+publishing and before the pointer flips — not by hand. It uses Python clients only, because that
+image has neither `gcloud` nor `bq`.
+
 ## Technical Implementation
 
 ### BigQuery Configuration
@@ -999,7 +1021,7 @@ genetics-results-db/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_credsets_coloc.sh  # Load credible sets and colocalization data
-│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+UKBB/MVP/AoU meta-analyses, external EXT file: COVID-19 HGI + PGC + GP2 + IIBDGC, deCODE pQTL)
+│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+MVP+UKBB+AoU R14 meta-analysis, external EXT file: COVID-19 HGI + PGC + GP2 + IIBDGC, deCODE pQTL)
 │   ├── load_genebass_variants.sh    # Load GeneBASS exome variant results (truncates table)
 │   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results, unfiltered per-trait files (truncates table)
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
@@ -1018,6 +1040,7 @@ genetics-results-db/
 │   ├── load_rcnv_window_associations.sh # Load Collins et al. 2022 rCNV sliding-window associations (WRITE_TRUNCATE) + create rcnv_window_associations_v view
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gnomad_variant_annotation.sh # Shard the served gnomAD sites file by chromosome, upload, and load (one chromosome replaced per load; rerunnable)
+│   ├── load_cellxgene.sh          # Replace every cellxgene_* table with one CELLxGENE release, in one transaction (run by the munge driver)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   ├── load_phenotypes.sh         # Build + load phenotypes and datasets metadata tables (WRITE_TRUNCATE)
@@ -1103,7 +1126,7 @@ genetics-results-db/
 
    `CREDSET_FILES` in the script is the list of source objects; the relative layout under `credible_sets/` is the same in both deployments' buckets, so `GCS_BUCKET`/`GCS_PREFIX` are the only per-deployment inputs. A resource re-annotated against a newer gnomAD (`most_severe`/`gene_most_severe` re-stamped, every other column unchanged) is written to a sibling prefix (`<release>_gnomad411/`) rather than over the old objects, so a reload can be compared against the previous table and rolled back by pointing the list back. Open Targets is the exception: its re-annotation coincided with release 26.09, whose `trait` is `<readable name>_(<GCST accession>)` while `trait_original` stays the bare accession, so the phenotypes join (below) is untouched. The pre-load `DELETE` names the superseded `dataset` value next to the new one until the old rows are gone from every deployment.
 
-3. **Load pseudo credible sets** (FinnGen+UKBB, FinnGen+MVP+UKBB and FinnGen+MVP+UKBB+AoU meta-analysis pseudo credible sets, plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
+3. **Load pseudo credible sets** (FinnGen+MVP+UKBB+AoU R14 meta-analysis pseudo credible sets — the R13 FinnGen+UKBB and FinnGen+MVP+UKBB ones are no longer loaded or deleted by this script, and their rows are removed by hand when a deployment retires them — plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
    ```bash
    ./scripts/load_pseudo.sh
    ```
