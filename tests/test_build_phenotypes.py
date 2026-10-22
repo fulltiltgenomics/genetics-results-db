@@ -306,10 +306,13 @@ def test_absence_is_scoped_per_profile_not_global():
 
 
 def test_iibdgc_is_suppressed_only_where_its_credible_sets_are_absent():
-    """daly's credible_sets_v holds IIBDGC rows, so suppressing them there hides the three
-    ibd_gwas phenotypes (IBD/UC/CD) the join is supposed to resolve."""
-    assert "IIBDGC" in absent_from_results("finngen")
-    assert "IIBDGC" not in absent_from_results("daly")
+    """Both deployments' credible_sets_v hold IIBDGC rows, so suppressing them anywhere hides
+    the three ibd_gwas phenotypes (IBD/UC/CD) the join is supposed to resolve."""
+    path = os.path.join(os.path.dirname(__file__), "..", "configs", "datasets.yaml")
+    with open(path) as handle:
+        profiles = yaml.safe_load(handle)["profiles"]
+    for profile in profiles:
+        assert "IIBDGC" not in absent_from_results(profile)
 
 
 def test_absent_datasets_are_emitted_with_a_null_dataset_and_no_phenotypes():
