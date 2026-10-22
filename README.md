@@ -14,7 +14,7 @@ The loaders run the Python helpers through the interpreter `scripts/lib/common.s
 
 [scripts/load_credsets_coloc.sh](scripts/load_credsets_coloc.sh) loads credible sets and colocalization results
 
-[scripts/load_pseudo.sh](scripts/load_pseudo.sh) loads pseudo credible sets (the FinnGen+MVP+UKBB+AoU R14 meta-analysis, the external COVID-19 HGI, PGC, GP2 and IIBDGC bundle, and deCODE 2021 plasma pQTL)
+[scripts/load_pseudo.sh](scripts/load_pseudo.sh) loads pseudo credible sets (the files listed in the script)
 
 [scripts/load_genebass_variants.sh](scripts/load_genebass_variants.sh) loads GeneBASS exome variant results (truncates `exome_variant_results`)
 

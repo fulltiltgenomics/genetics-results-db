@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS `genetics_results.phenotypes`
   trait_type STRING OPTIONS(description="'binary' or 'quantitative'; derived from case/control counts where the source does not state it, NULL when neither is available"),
   category STRING OPTIONS(description="Source-provided grouping, e.g. the FinnGen ICD chapter, the FinnGen Kanta 'Quantitative'/'Binary' class, the Open Targets project id or the Genebass trait_type"),
   n_samples INT64 OPTIONS(description="Total analysed sample size; NULL when the source does not report it (not 0)"),
-  n_cases INT64 OPTIONS(description="Number of cases; NULL for quantitative traits and where unreported"),
+  n_cases INT64 OPTIONS(description="Number of cases as the source reports it; for a quantitative trait some sources (FinnGen GWAS and meta-analysis files) put the whole sample here and others leave it NULL, so tell binary from quantitative by trait_type, not by a NULL n_cases"),
   n_controls INT64 OPTIONS(description="Number of controls; NULL for quantitative traits and where unreported"),
   dataset_id STRING NOT NULL OPTIONS(description="ONE contributing datasets.yaml registry key - provenance, NOT a join key. Where several registry entries merge into one `datasets` row that row keeps only the first as its `dataset_id`, so values like 'finngen_kanta_r12' and 'genebass_gene_based' match no datasets row at all. Join `datasets` on `dataset`, or on `dataset_id IN UNNEST(datasets.dataset_ids)` to reach the merged-away keys"),
   resource STRING NOT NULL OPTIONS(description="Resource the dataset belongs to (finngen, open_targets, genebass, ...)"),

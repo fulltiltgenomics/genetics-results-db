@@ -1,8 +1,6 @@
 #!/bin/bash
-# Load pseudo credible set data from GCS into BigQuery
-# these are FinnGen+MVP+UKBB+AoU (R14) meta-analysis pseudo
-# credible sets, a shared external file bundling COVID-19 HGI, PGC (SCZ/BIP), GP2 (PD) and
-# IIBDGC (IBD/UC/CD), and the deCODE 2021 plasma pQTL sets (their own file)
+# Load the pseudo credible-set files in PSEUDO_CREDSET_FILES from GCS into BigQuery, replacing
+# the rows of the datasets the DELETE below names
 
 set -euo pipefail
 

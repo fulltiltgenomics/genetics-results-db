@@ -1021,7 +1021,7 @@ genetics-results-db/
 │   ├── setup_bigquery.sh      # Create dataset and tables
 │   ├── load_data.py           # Python loader for tsv.gz files
 │   ├── load_credsets_coloc.sh  # Load credible sets and colocalization data
-│   ├── load_pseudo.sh         # Load pseudo credible sets (FinnGen+MVP+UKBB+AoU R14 meta-analysis, external EXT file: COVID-19 HGI + PGC + GP2 + IIBDGC, deCODE pQTL)
+│   ├── load_pseudo.sh         # Load pseudo credible sets (the files listed in the script)
 │   ├── load_genebass_variants.sh    # Load GeneBASS exome variant results (truncates table)
 │   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results, unfiltered per-trait files (truncates table)
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
@@ -1126,7 +1126,7 @@ genetics-results-db/
 
    `CREDSET_FILES` in the script is the list of source objects; the relative layout under `credible_sets/` is the same in both deployments' buckets, so `GCS_BUCKET`/`GCS_PREFIX` are the only per-deployment inputs. A resource re-annotated against a newer gnomAD (`most_severe`/`gene_most_severe` re-stamped, every other column unchanged) is written to a sibling prefix (`<release>_gnomad411/`) rather than over the old objects, so a reload can be compared against the previous table and rolled back by pointing the list back. Open Targets is the exception: its re-annotation coincided with release 26.09, whose `trait` is `<readable name>_(<GCST accession>)` while `trait_original` stays the bare accession, so the phenotypes join (below) is untouched. The pre-load `DELETE` names the superseded `dataset` value next to the new one until the old rows are gone from every deployment.
 
-3. **Load pseudo credible sets** (FinnGen+MVP+UKBB+AoU R14 meta-analysis pseudo credible sets — the R13 FinnGen+UKBB and FinnGen+MVP+UKBB ones are no longer loaded or deleted by this script, and their rows are removed by hand when a deployment retires them — plus a single shared external `EXT_*` file bundling COVID-19 HGI (`covid_hgi`), PGC SCZ (`pgc_scz`), PGC BIP (`pgc_bip`), and GP2 PD (`gp2_pd`) pseudo credible sets — the pre-load DELETE clears the `COVID19_HGI`, `PGC`, and `GP2` dataset rows together):
+3. **Load pseudo credible sets** (the files in the script's `PSEUDO_CREDSET_FILES`; one pre-load DELETE clears every dataset its `WHERE dataset IN` names, so a dataset dropped from that list keeps its rows until they are removed by hand):
    ```bash
    ./scripts/load_pseudo.sh
    ```
