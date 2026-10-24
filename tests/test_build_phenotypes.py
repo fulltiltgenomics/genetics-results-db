@@ -458,3 +458,16 @@ def test_other_harmonizers_emit_an_empty_contributing_cohorts_not_null():
     rows, _ = _phenotypes()
     assert rows and all(r["contributing_cohorts"] == [] for r in rows)
 
+
+
+def test_on_request_entries_get_no_phenotype_rows_either():
+    """phenotypes_v is the phenotype catalogue every SQL caller reads: an on-request
+    dataset's endpoints must not stand beside the release ones in a default search."""
+    registry = {**REGISTRY, "finngen_sex_specific_r12": {
+        **REGISTRY["finngen_gwas"], "dataset": "FinnGen_R12_sex_specific",
+        "resource": "finngen_sex_specific", "on_request": True,
+    }}
+    metadata = {**METADATA, "finngen_sex_specific_r12": METADATA["finngen_gwas"]}
+    rows, _ = build_phenotypes(registry, metadata, ABSENT)
+    assert not [r for r in rows if r["dataset"] == "FinnGen_R12_sex_specific"]
+

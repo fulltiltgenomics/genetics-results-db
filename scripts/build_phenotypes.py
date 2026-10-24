@@ -386,10 +386,16 @@ def build_phenotypes(registry, metadata_by_dataset_id, absent):
 
     Collisions are resolved in favour of the currently released dataset over a
     coloc-partner-only one, so the (dataset, trait_original) join stays 1:1.
+
+    An `on_request` entry gets no rows, as in build_datasets: phenotypes_v is the
+    phenotype catalogue every SQL caller reads, and a row there would put the dataset's
+    endpoints beside the release ones in a default search.
     """
     by_key = {}
     dropped = []
     for dataset_id, entry in registry.items():
+        if entry.get("on_request"):
+            continue
         harmonizer = _PHENOTYPE_HARMONIZERS.get(entry.get("metadata_harmonizer"))
         if harmonizer is None:
             continue
