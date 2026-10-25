@@ -386,7 +386,7 @@ rollback. Watch API error rates and query costs.
 > `scripts/load_credsets_coloc.sh` and `scripts/load_pseudo.sh` must not run at any point
 > from the start of §4.2 until §4.6 is complete. Neither is aware of the swap:
 >
-> - `load_credsets_coloc.sh:125` and `load_pseudo.sh:33` both `DELETE FROM
+> - `load_credsets_coloc.sh` and `load_pseudo.sh` both `DELETE FROM
 >   ...genetics_results.credible_sets` — the **old** table, which during the soak is the
 >   rollback target — and *then* append.
 > - The append will fail, because after §4.2 the loader projects 21 columns
