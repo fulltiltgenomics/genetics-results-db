@@ -33,7 +33,7 @@ BigQuery Dataset
   │   └── decode_pqtl_signals_v (view: one row per deCODE pQTL set, flags the strongest lead per ±2 Mb; no base table)
   ├── colocalization (partitioned by chr, clustered by dataset pairs)
   │   └── colocalization_v (view: adds resource columns)
-  ├── coloc_credsets (partitioned by chr, clustered by dataset, data_type)
+  ├── coloc_credsets (partitioned by chr, clustered by dataset, data_type, cs_id)
   │   └── coloc_credsets_v (view: adds variant, resource columns)
   ├── exome_variant_results (partitioned by chr, clustered by dataset, gene, trait)
   │   └── exome_variant_results_v (view: adds variant, resource columns)
@@ -71,6 +71,9 @@ BigQuery Dataset
   │   └── rcnv_segments_v (view: adds resource column mapped to 'rcnv', SPLITs the six ';'-joined lists into ARRAY<STRING>)
   ├── rcnv_window_associations (partitioned by chr, clustered by phenotype, cnv_type, window_start)
   │   └── rcnv_window_associations_v (view: adds resource column mapped to 'rcnv'; no join — a window has no gene)
+  ├── cellxgene_summary, cellxgene_expression, cellxgene_measured_genes (partitioned by chr, clustered by gene_name, gene_id)
+  ├── cellxgene_datasets (unpartitioned, clustered by dataset_key), cellxgene_groups (unpartitioned, clustered by dataset_key, group_key)
+  │   └── one <table>_v view each (see "cellxgene_*" below)
   ├── phenotypes (unpartitioned metadata table, clustered by dataset, trait_original)
   │   └── phenotypes_v (view: pass-through — resource is already a registry column)
   └── datasets (unpartitioned metadata table, clustered by dataset, resource)
@@ -653,7 +656,7 @@ image has neither `gcloud` nor `bq`.
 
 ### BigQuery Configuration
 
-- **Partitioning**: a table is partitioned by chromosome (`PARTITION BY RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`) exactly when a chromosome filter can eliminate work — i.e. its rows span chromosomes *and* it is accessed positionally. Everything else is unpartitioned: the small reference/link/metadata tables, whose access is gene- or key-keyed and a full scan of which is cheap, and `hla_associations`, whose every row is chr 6 so a chromosome partition would hold the whole table. **Do not read the membership of either set out of this paragraph** — it has already gone stale once by omitting `hla_associations`. Re-derive it: `grep -L 'PARTITION BY' schemas/*.sql | grep -v _v.sql` lists the unpartitioned base tables.
+- **Partitioning**: a table is partitioned by chromosome (`PARTITION BY RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`, with a higher upper bound where a table's chromosome encoding goes past 23 — `gnomad_variant_annotation` and the partitioned `cellxgene_*` tables; each DDL states its own) exactly when a chromosome filter can eliminate work — i.e. its rows span chromosomes *and* it is accessed positionally. Everything else is unpartitioned: the small reference/link/metadata tables, whose access is gene- or key-keyed and a full scan of which is cheap, and `hla_associations`, whose every row is chr 6 so a chromosome partition would hold the whole table. **Do not read the membership of either set out of this paragraph** — it has already gone stale once by omitting `hla_associations`. Re-derive it: `grep -L 'PARTITION BY' schemas/*.sql | grep -v _v.sql` lists the unpartitioned base tables.
 - **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables). `credible_sets` is the exception and the model to copy for high-traffic tables: it clusters on `data_type, resource, variant, pos`, the columns callers are actually told to filter by, which required storing `resource` and `variant` instead of deriving them in the view — clustering cannot use a view-derived expression. Clustering and partitioning cannot be changed in place; see [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md) for the rebuild pattern and why `setup_bigquery.sh` cannot do it.
 
 ### API Service
@@ -819,7 +822,7 @@ Notes:
 
   A genuine `accessDenied` is answered 403 — but the message may **not** claim the table was outside the exposed set, because that is not knowable here. Denial on an *allow-listed* table is reachable (an IAM edit, an expired IAM condition, column-level security or policy tags on a view's columns, a dataset-ACL edit), and the `referencedTables` that would tell the two cases apart do not exist, since the `query()` call raised before any job existed. The wording is hedged accordingly, and this branch also logs at **error**: a denial on an exposed table is an outage.
 
-  BigQuery's denial text stays out of the response on the plain ground that **the caller has no use for it** — it names a fully-qualified table the caller may never have written, and nothing they could do with it changes the outcome. It is *not* muted to close an enumeration oracle: the status code alone already separates "does not exist" (400) from "exists but denied" (403), the allow-list 403 echoes the resolved fully-qualified `disallowed` ids, and the `NotFound`/`BadRequest` branch returns `e.message` verbatim, which hands out `PROJECT_ID.DATASET_ID` for a bare name. The detail goes to the log. The `Forbidden` handler on the *execution* path is muted for the same "no use to the caller" reason, and is unreachable through caller-chosen tables anyway, since the gate has already proved every referenced table is allow-listed. Pinned by `tests/test_authorize_query_errors.py`, which stubs BigQuery (no credentials, runs by default) and asserts per exception type and per `reason` both the status code and that only the dry run was submitted.
+  BigQuery's denial text stays out of the response on the plain ground that **the caller has no use for it** — it names a fully-qualified table the caller may never have written, and nothing they could do with it changes the outcome. It is *not* muted to close an enumeration oracle: the status code alone already separates "does not exist" (400) from "exists but denied" (403), the allow-list 403 echoes the resolved fully-qualified `disallowed` ids, and the `NotFound`/`BadRequest` branch returns `e.message` verbatim, which hands out `PROJECT_ID.DATASET_ID` for a bare name. The detail goes to the log. The `Forbidden` handler on the *execution* path is muted for the same "no use to the caller" reason, and is unreachable through caller-chosen tables anyway, since the gate has already proved every referenced table is allow-listed. Pinned by `tests/test_authorize_query_errors.py`, which stubs every BigQuery call (no BigQuery access, runs by default — though, like every test that imports `api.main`, it needs Application Default Credentials to resolve for the client `api.main` constructs at import) and asserts per exception type and per `reason` both the status code and that only the dry run was submitted.
 - When the caller passes `dry_run: true`, the authorization probe *is* the estimate — its `total_bytes_processed` is returned directly, so no second job is submitted.
 - `referencedTables` for a view query may name the view, its base table, or both, depending on how BigQuery expands it; both forms are in the allow-list.
 - The allow-list is derived from `VIEWS`, which is itself derived from the `exposed: true` flags in `configs/datasets.yaml`'s `tables` block (`api/yaml_loader.load_views`). A `tables` entry only documents a view; the flag is what exposes it, and it defaults to closed. A table that is loaded but has no view, or a view without the flag, is **not** queryable through `/query`. `tests/test_exposed_views.py` pins the exposed set by name, so a widening fails it in CI — that is a test, not a deploy-path gate: the config reaches a running pod as a ConfigMap without it running.
@@ -865,7 +868,7 @@ grep -rhEA1 '(os\.environ(\.get)?|os\.getenv|_env_int)\(' api/ \
   | grep -oE '"[A-Z][A-Z0-9_]{2,}"' | tr -d '"' | sort -u
 ```
 
-That finds 15 names, i.e. every row below except `LOCATION` and `GCS_BUCKET`/`GCS_PREFIX`,
+That finds 16 names, i.e. every row below except `LOCATION` and `GCS_BUCKET`/`GCS_PREFIX`,
 which are read only by `scripts/`. Neither of the two complications is optional: `-A1`
 because the name is not always on the line that opens the call (`CORS_ORIGINS` in
 `api/main.py` sits on the next line), and `_env_int` because the four
@@ -882,6 +885,7 @@ rows while looking authoritative, which is worse than the stale list it replaces
 | MAX_BYTES_BILLED | 107374182400 | Maximum bytes billed per query (100 GB) |
 | PORT | 8080 | API server port |
 | DATASETS_CONFIG_PATH | ./configs/datasets.yaml | Path to shared datasets YAML config |
+| CONFIG_PROFILE | (unset) | Deployment profile, one of the top-level `profiles:` keys of `datasets.yaml`. Read once at import (`api/main.py`) and passed to `api/yaml_loader.load_views`, which exposes a `tables` entry carrying `profiles: [...]` only on the listed profiles. Unset or unknown hides every profile-gated view and logs why (`gate_errors`); a view without the key is exposed on every profile |
 | GCS_BUCKET / GCS_PREFIX | varies by loader (placeholder `bucket-name` with an empty prefix in most; `finngen-commons` with a `GCS_PREFIX` rooted at `results_api_data/` in the newer ones — some append a `mapping_files/` subdirectory, see the individual script for its exact default) | GCS source location for `scripts/load_*.sh`. Whether an explicitly empty `GCS_PREFIX=""` survives or is replaced by the loader's default is a per-loader choice, named at each call site as `resolve_gcs_prefix unset-only` / `unset-or-empty` (`scripts/lib/common.sh`) |
 | CORS_ORIGINS | http://localhost:3000,http://127.0.0.1:3000 | Comma-separated origins allowed to call the API from a browser |
 | INTERNAL_API_SECRET | (unset) | Shared secret required as `Authorization: Bearer` on every endpoint except `/health`. Unset disables authentication entirely (logs a warning at startup) |
@@ -1011,6 +1015,8 @@ genetics-results-db/
 │   ├── variant_annotation_v.sql       # View with constant resource='finngen'
 │   ├── gnomad_variant_annotation.sql  # gnomAD per-variant frequencies and VEP annotation (stored variant column, consequences as ARRAY<STRUCT>)
 │   ├── gnomad_variant_annotation_v.sql # View with constant resource='gnomad'
+│   ├── cellxgene_{summary,expression,measured_genes,datasets,groups}.sql    # CELLxGENE release tables (replaced together, see "cellxgene_*")
+│   ├── cellxgene_{summary,expression,measured_genes,datasets,groups}_v.sql  # One view each
 │   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
 │   ├── phenotypes_v.sql               # Pass-through view (resource is a registry column)
 │   ├── datasets.sql                   # Dataset registry keyed by results-view `dataset`
@@ -1046,7 +1052,11 @@ genetics-results-db/
 │   ├── load_phenotypes.sh         # Build + load phenotypes and datasets metadata tables (WRITE_TRUNCATE)
 │   ├── live_dataset_scope.py      # Derives the registry cross-check scope from datasets.yaml
 │   ├── build_phenotypes.py        # Build phenotypes/datasets NDJSON from datasets.yaml + its metadata_file sources
-│   └── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
+│   ├── generate_resource_sql.py # Generate/lint CASE/WHEN SQL from shared datasets.yaml
+│   ├── bench_credible_sets_layout.py # A/B the credible_sets clustering layouts against logged query shapes (needs BigQuery)
+│   ├── lint-staged.sh             # Pre-commit lint gate (blocks), see "Lint gate"
+│   ├── check-doc-drift.sh         # Pre-commit doc-drift warning (never blocks)
+│   └── install-git-hooks.sh       # Wires core.hooksPath to the tracked hooks; run once per clone
 ├── configs/
 │   └── datasets.yaml          # Shared dataset/resource config — generated, gitignored;
 │                              #   run ../genetics-results-suite/scripts/sync-datasets.sh
@@ -1055,24 +1065,34 @@ genetics-results-db/
 │   ├── sandbox_auth.py        # Per-execution sandbox JWT validation (the caps it gates are in main.py)
 │   ├── sandbox_budget.py      # Per-jti request-count/concurrency gate + its ASGI middleware
 │   └── yaml_loader.py         # Loads datasets.yaml into data structures used by main.py, VIEWS included
-├── tests/                     # All client-free unless noted; none needs BigQuery credentials
+├── tests/                     # None queries BigQuery unless noted, but importing api.main constructs a
+│                              #   bigquery.Client, so those that import it need Application Default
+│                              #   Credentials to resolve; several read the synced configs/datasets.yaml directly
 │   ├── conftest.py            # Foreign-checkout guard + auth env restore
 │   ├── test_api_auth.py       # Shared-secret authentication tests (never reach BigQuery)
 │   ├── test_authorize_query_errors.py  # /query error mapping per BigQuery exception (stubbed)
 │   ├── test_build_gene_annotations.py  # gene_annotations build unit tests
 │   ├── test_build_phenotypes.py        # phenotypes/datasets NDJSON build unit tests
+│   ├── test_categorical_value_rendering.py # /schema categorical values rendered as strings whatever their type
+│   ├── test_derived_view_lists.py      # view lists derived from datasets.yaml (lint scope, cross-check exclusions), pinned by name
 │   ├── test_endpoint_access_log.py     # endpoint_access attribution rows
 │   ├── test_exposed_views.py           # pins the exposed view set / /query allow-list by name
+│   ├── test_handlers_do_not_block_loop.py # BigQuery handlers stay plain `def` (threadpool, not the event loop)
 │   ├── test_hla_view_columns.py        # hla_associations_v select list vs base-table schema
 │   ├── test_internal_query_caps.py     # per-credential row/byte caps
 │   ├── test_live_dataset_scope.py      # registry cross-check scope derived from datasets.yaml
+│   ├── test_load_data_replace_chr.py   # --replace-chr ordering and the JSON-to-typed-array projection
 │   ├── test_load_data_row_counts.py    # load_table's (job, rows_written) contract
+│   ├── test_load_data_transactional.py # --transaction all-or-none multi-table replace
 │   ├── test_no_sql_rewriting.py        # asserts the deleted SQL-rewriting helpers stay deleted
 │   ├── test_query_caps.py              # /query row and byte limits
 │   ├── test_query_name_resolution.py   # bare-name resolution (skips without LIVE_BQ_* env)
+│   ├── test_query_struct_values.py     # STRUCT/ARRAY values reach /query as JSON objects/arrays
 │   ├── test_sandbox_budget.py          # per-jti request-count and concurrency gate
 │   ├── test_sandbox_token_auth.py      # sandbox execution-token validation
-│   └── test_secret_read_timing.py      # per-request secret read and its fail-closed latch
+│   ├── test_schema_repeated_mode.py    # a view's REPEATED column keeps its mode on /schema
+│   ├── test_secret_read_timing.py      # per-request secret read and its fail-closed latch
+│   └── test_view_profile_gate.py       # per-view `profiles` gate under CONFIG_PROFILE
 ├── docs/
 │   ├── credible-sets-clustering-swap.md  # credible_sets clustering swap runbook
 │   └── project-spec.md        # This document
@@ -1355,7 +1375,10 @@ bypass. It is the one pre-commit check that blocks; `scripts/check-doc-drift.sh`
   warns and proceeds.
 
 The rule set matches the sibling repos, because the same gate runs in all five and a
-per-repo rule set means the same file passes in one and fails in the next. Neither hook
+per-repo rule set means the same file passes in one and fails in the next. The one
+per-file exclusion is `F811` for `tests/*` (`[tool.ruff.lint.per-file-ignores]` in
+`pyproject.toml`): the tests import shared fixtures from a sibling test module and then take
+them as parameters, which pyflakes cannot tell apart from a real redefinition. Neither hook
 runs until `scripts/install-git-hooks.sh` has been run once in the clone; `core.hooksPath`
 is local git config that no clone carries, and it is shared across worktrees, so that one
 run covers every worktree too.
