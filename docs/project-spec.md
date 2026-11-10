@@ -581,7 +581,7 @@ LEFT JOIN phenotypes_v p USING (dataset, trait_original)
 WHERE cs.chr = 6 AND cs.pos BETWEEN 32000000 AND 33000000
 ```
 
-**Coverage is partial by design.** Only datasets that ship a phenotype metadata file have rows — FinnGen R14/R12/Kanta/drugs, the FinnGen+UKBB, FinnGen+MVP+UKBB and FinnGen+MVP+UKBB+AoU meta-analyses, Open Targets GWAS, Genebass, BRaVa, COVID-19 HGI, IIBDGC, the Collins rCNV map, the EstBB-UKBB NMR traits and the deCODE pQTL aptamers (aptamer id to target gene symbol). Other QTL datasets, Open Targets QTL among them, have none (their traits are genes, proteins and peaks, resolved via `gene_annotations` and `peak_to_gene`), and neither do datasets whose codes are already readable (PGC, GP2, BipEx2, SCHEMA2, IBD_exome). Use a `LEFT JOIN` when the dataset is not known in advance. Ranked fuzzy phenotype *search* stays on results-api; this table serves exact resolution and SQL-expressible filtering.
+**Coverage is partial by design.** Datasets that ship a phenotype metadata file have rows — FinnGen R14/R12/Kanta/drugs, the FinnGen+UKBB, FinnGen+MVP+UKBB and FinnGen+MVP+UKBB+AoU meta-analyses, Open Targets GWAS, Genebass, BRaVa, COVID-19 HGI, IIBDGC, the Collins rCNV map, the EstBB-UKBB NMR traits and the deCODE pQTL aptamers (aptamer id to target gene symbol). Other QTL datasets, Open Targets QTL among them, have none (their traits are genes, proteins and peaks, resolved via `gene_annotations` and `peak_to_gene`), while a dataset with no metadata file gets its rows from the inline `phenotypes` list of its registry entry (PGC, GP2, BipEx2, SCHEMA2, IBD_exome, ASC2). Use a `LEFT JOIN` when the dataset is not known in advance. Ranked fuzzy phenotype *search* stays on results-api; this table serves exact resolution and SQL-expressible filtering.
 
 | Column | Type | Required | Description |
 |---|---|---|---|
@@ -1222,7 +1222,7 @@ These four loaders default `GCS_BUCKET` to the placeholder `bucket-name`, so set
     ```bash
     PROFILE=finngen ./scripts/load_phenotypes.sh
     ```
-    `build_phenotypes.py` reads the synced `configs/datasets.yaml` and every `metadata_file` it references from GCS, harmonizes them (mirroring genetics-results-api's `MetadataHarmonizer`), and writes two NEWLINE_DELIMITED_JSON files that `load_data.py` loads. **Re-run after any change to `datasets.yaml` or a metadata file** — nothing else propagates registry edits into BigQuery.
+    `build_phenotypes.py` reads the synced `configs/datasets.yaml` and every `metadata_file` it references from GCS, harmonizes them (mirroring genetics-results-api's `MetadataHarmonizer`), takes the inline `phenotypes` list of an entry that has no metadata file, and writes two NEWLINE_DELIMITED_JSON files that `load_data.py` loads. **Re-run after any change to `datasets.yaml` or a metadata file** — nothing else propagates registry edits into BigQuery.
 
     `PROFILE` selects both the dataset registry and, through the registry's `metadata_file` URIs, the bucket the metadata is read from; `GCS_BUCKET`/`GCS_PREFIX` only control where the generated NDJSON is staged (default `finngen-commons` / `results_api_data/mapping_files/`).
 

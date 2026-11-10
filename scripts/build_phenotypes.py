@@ -364,6 +364,34 @@ def _genebass(items, entry):
     return rows
 
 
+def _inline(entry):
+    """The entry's own `phenotypes` list, for a dataset with no metadata file.
+
+    results-api's search index serves these codes from the same list, so a results row
+    carrying one would otherwise be the only kind whose advertised code resolves to nothing
+    here. The list states no trait type; the entry's is used unless it is "mixed", which
+    describes the dataset and not any one trait.
+    """
+    entry_type = entry.get("trait_type")
+    rows = []
+    for item in entry.get("phenotypes") or []:
+        n_cases = safe_int(item.get("n_cases"))
+        n_controls = safe_int(item.get("n_controls"))
+        n_samples = safe_int(item.get("n_samples"))
+        if n_samples is None and n_cases is not None and n_controls is not None:
+            n_samples = n_cases + n_controls
+        rows.append({
+            "trait": item.get("phenotype_code") or "",
+            "trait_name": item.get("phenotype_string") or None,
+            "trait_type": None if entry_type == "mixed" else entry_type,
+            "category": None,
+            "n_cases": n_cases,
+            "n_controls": n_controls,
+            "n_samples": n_samples,
+        })
+    return rows
+
+
 # eqtl_catalogue is deliberately absent: its "phenotypes" are QTD sub-STUDIES, which become
 # rows of `datasets` (the results views put the QTD id in the `dataset` column, and `trait`
 # holds a gene id). Routing it through _PHENOTYPE_HARMONIZERS would produce rows that never join.
@@ -384,8 +412,14 @@ def build_phenotypes(registry, metadata_by_dataset_id, absent):
 
     `absent` is this profile's absent_from_results() mapping.
 
+    An entry's rows come from its metadata file when it has one and a harmonizer for it,
+    and from its inline `phenotypes` list otherwise; the file wins where both exist because
+    it is the fuller source.
+
     Collisions are resolved in favour of the currently released dataset over a
-    coloc-partner-only one, so the (dataset, trait_original) join stays 1:1.
+    coloc-partner-only one, so the (dataset, trait_original) join stays 1:1. Two products of
+    one dataset that list the same phenotypes (the burden and variant entries of an exome
+    release) collide by construction; the first in registry order supplies the row.
 
     An `on_request` entry gets no rows, as in build_datasets: phenotypes_v is the
     phenotype catalogue every SQL caller reads, and a row there would put the dataset's
@@ -397,13 +431,12 @@ def build_phenotypes(registry, metadata_by_dataset_id, absent):
         if entry.get("on_request"):
             continue
         harmonizer = _PHENOTYPE_HARMONIZERS.get(entry.get("metadata_harmonizer"))
-        if harmonizer is None:
-            continue
         items = metadata_by_dataset_id.get(dataset_id)
-        if not items:
-            continue
+        if harmonizer is not None and items:
+            harmonized = harmonizer(items, entry)
+        else:
+            harmonized = _inline(entry)
         partner_only = dataset_id in COLOC_PARTNER_ONLY_DATASET_IDS
-        harmonized = harmonizer(items, entry)
         for dataset in results_view_datasets(entry):
             if dataset in absent:
                 continue  # a phenotype row keyed on a dataset no results view has joins nothing
