@@ -83,7 +83,7 @@ REGISTRY = {
         "metadata_file": "gs://x/ot_2609_data_studies.json", "metadata_harmonizer": "open_targets",
     },
     "eqtl_catalogue": {
-        "resource": "eqtl_catalogue", "version": "R8", "description": "collection",
+        "resource": "eqtl_catalogue", "version": "R8_pre", "description": "collection",
         "author": "eQTL Catalogue", "publication_date": "2026-01-01",
         "data_type": "mixed", "trait_type": "quantitative",
         "metadata_file": "gs://x/eqtl.tsv", "metadata_harmonizer": "eqtl_catalogue",
