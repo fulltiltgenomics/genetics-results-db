@@ -74,6 +74,8 @@ BigQuery Dataset
   ├── cellxgene_summary, cellxgene_expression, cellxgene_measured_genes (partitioned by chr, clustered by gene_name, gene_id)
   ├── cellxgene_datasets (unpartitioned, clustered by dataset_key), cellxgene_groups (unpartitioned, clustered by dataset_key, group_key)
   │   └── one <table>_v view each (see "cellxgene_*" below)
+  ├── missense_residue (partitioned by chr, clustered by pos)
+  │   └── missense_residue_v (view: pass-through)
   ├── phenotypes (unpartitioned metadata table, clustered by dataset, trait_original)
   │   └── phenotypes_v (view: pass-through — resource is already a registry column)
   └── datasets (unpartitioned metadata table, clustered by dataset, resource)
@@ -652,11 +654,33 @@ The loader is run by the pipeline's driver, inside the cellxgene image (which co
 publishing and before the pointer flips — not by hand. It uses Python clients only, because that
 image has neither `gcloud` nor `bq`.
 
+### missense_residue (variant-to-residue map)
+
+The BigQuery mirror of the protein structure release's `variants.tsv.gz` (daly only; the
+contract is genetics-results-munge `docs/protein-structure.md`), so a sandbox query can join
+a variant to the residue it changes. Columns, partitioning and clustering:
+`schemas/missense_residue.sql`. What a caller needs to know:
+
+- **One row per (variant, UniProt accession)**, so a variant on two proteins has two rows and
+  a join on `variant` alone can multiply rows.
+- **Filter on `chr`, and on `pos` when known**, as for `gnomad_variant_annotation`; a join
+  from an association view matches `chr`, `pos` and `variant` and gives this side its own
+  literal `chr =`.
+- **Absence means one thing.** A variant with no row is not a missense change of the canonical
+  UniProt isoform under the map's annotation (VEP 115 / Ensembl 115) — not that it is
+  non-coding, synonymous, or missense in no transcript.
+- **The served release is queryable.** `scripts/load_missense_residue.sh` takes a release URI
+  or the `releases/CURRENT` pointer, loads the object the API serves without copying it, and
+  writes the release name into `release` on every row in the transaction that replaces the
+  table (`load_data.py --transaction`), after checking the object's size and the staged row
+  count against the release manifest and the header against the loader's own column list.
+  The dataset comes from `--dataset` only: there is no default and `DATASET_ID` is not read.
+
 ## Technical Implementation
 
 ### BigQuery Configuration
 
-- **Partitioning**: a table is partitioned by chromosome (`PARTITION BY RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`, with a higher upper bound where a table's chromosome encoding goes past 23 — `gnomad_variant_annotation` and the partitioned `cellxgene_*` tables; each DDL states its own) exactly when a chromosome filter can eliminate work — i.e. its rows span chromosomes *and* it is accessed positionally. Everything else is unpartitioned: the small reference/link/metadata tables, whose access is gene- or key-keyed and a full scan of which is cheap, and `hla_associations`, whose every row is chr 6 so a chromosome partition would hold the whole table. **Do not read the membership of either set out of this paragraph** — it has already gone stale once by omitting `hla_associations`. Re-derive it: `grep -L 'PARTITION BY' schemas/*.sql | grep -v _v.sql` lists the unpartitioned base tables.
+- **Partitioning**: a table is partitioned by chromosome (`PARTITION BY RANGE_BUCKET(chr, GENERATE_ARRAY(1, 23, 1))`, with a higher upper bound where a table's chromosome encoding goes past 23 — `gnomad_variant_annotation`, `missense_residue` and the partitioned `cellxgene_*` tables; each DDL states its own) exactly when a chromosome filter can eliminate work — i.e. its rows span chromosomes *and* it is accessed positionally. Everything else is unpartitioned: the small reference/link/metadata tables, whose access is gene- or key-keyed and a full scan of which is cheap, and `hla_associations`, whose every row is chr 6 so a chromosome partition would hold the whole table. **Do not read the membership of either set out of this paragraph** — it has already gone stale once by omitting `hla_associations`. Re-derive it: `grep -L 'PARTITION BY' schemas/*.sql | grep -v _v.sql` lists the unpartitioned base tables.
 - **Clustering**: Tables clustered by frequently filtered columns (dataset, data_type, most_severe; `symbol` first for the gene-keyed tables). `credible_sets` is the exception and the model to copy for high-traffic tables: it clusters on `data_type, resource, variant, pos`, the columns callers are actually told to filter by, which required storing `resource` and `variant` instead of deriving them in the view — clustering cannot use a view-derived expression. Clustering and partitioning cannot be changed in place; see [credible-sets-clustering-swap.md](credible-sets-clustering-swap.md) for the rebuild pattern and why `setup_bigquery.sh` cannot do it.
 
 ### API Service
@@ -1017,6 +1041,8 @@ genetics-results-db/
 │   ├── gnomad_variant_annotation_v.sql # View with constant resource='gnomad'
 │   ├── cellxgene_{summary,expression,measured_genes,datasets,groups}.sql    # CELLxGENE release tables (replaced together, see "cellxgene_*")
 │   ├── cellxgene_{summary,expression,measured_genes,datasets,groups}_v.sql  # One view each
+│   ├── missense_residue.sql           # Variant-to-residue map of the protein structure release (stored variant and release columns)
+│   ├── missense_residue_v.sql         # Pass-through view
 │   ├── phenotypes.sql                 # Trait metadata keyed by (dataset, trait_original)
 │   ├── phenotypes_v.sql               # Pass-through view (resource is a registry column)
 │   ├── datasets.sql                   # Dataset registry keyed by results-view `dataset`
@@ -1047,6 +1073,7 @@ genetics-results-db/
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
 │   ├── load_gnomad_variant_annotation.sh # Shard the served gnomAD sites file by chromosome, upload, and load (one chromosome replaced per load; rerunnable)
 │   ├── load_cellxgene.sh          # Replace every cellxgene_* table with one CELLxGENE release, in one transaction (run by the munge driver)
+│   ├── load_missense_residue.sh   # Replace missense_residue with one protein structure release's variant-to-residue map, in one transaction (no default dataset)
 │   ├── load_gene_annotations.sh   # Build + load gene_annotations table (WRITE_TRUNCATE) + create gene_annotations_v view
 │   ├── build_gene_annotations.py  # Build gene_annotations NDJSON from HGNC + GENCODE sources
 │   ├── load_phenotypes.sh         # Build + load phenotypes and datasets metadata tables (WRITE_TRUNCATE)

@@ -701,6 +701,24 @@ SCHEMAS = {
         bigquery.SchemaField("gene_name", "STRING"),
         bigquery.SchemaField("dataset_key", "INT64", mode="REQUIRED"),
     ],
+    # `release` is not in the source file; the loader passes it as a const column
+    "missense_residue": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("variant", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("accession", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("gene_id", "STRING"),
+        bigquery.SchemaField("gene_name", "STRING"),
+        bigquery.SchemaField("aa_pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("aa_ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("aa_alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("model_file_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("file_position", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("mu_snp", "FLOAT64"),
+        bigquery.SchemaField("release", "STRING", mode="REQUIRED"),
+    ],
 }
 
 # tables whose source writes NULL as an empty field rather than NA. A custom null marker
@@ -711,6 +729,7 @@ EMPTY_NULL_TABLES = {
     "cellxgene_groups",
     "cellxgene_datasets",
     "cellxgene_measured_genes",
+    "missense_residue",
 }
 
 # tables loaded from NEWLINE_DELIMITED_JSON instead of CSV/TSV (required for
@@ -1148,6 +1167,8 @@ HEADER_ALIASES = {
     "cellxgene_summary": {"chr": "chrom"},
     "cellxgene_expression": {"chr": "chrom"},
     "cellxgene_measured_genes": {"chr": "chrom"},
+    # the header line carries tabix's `#` meta character
+    "missense_residue": {"chr": "#chrom"},
 }
 
 

@@ -56,6 +56,7 @@ GATED_VIEWS = {
         "cellxgene_groups_v",
         "cellxgene_measured_genes_v",
         "cellxgene_summary_v",
+        "missense_residue_v",
     },
 }
 
