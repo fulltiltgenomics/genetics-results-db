@@ -50,6 +50,12 @@ The loaders run the Python helpers through the interpreter `scripts/lib/common.s
 
 [scripts/load_dosage_sensitivity.sh](scripts/load_dosage_sensitivity.sh) loads the Collins et al. 2022 gene dosage-sensitivity scores (truncates `dosage_sensitivity`)
 
+[scripts/load_rcnv_gene_associations.sh](scripts/load_rcnv_gene_associations.sh) loads the Collins et al. 2022 per-phenotype rCNV gene associations (truncates `rcnv_gene_associations`; run before `load_phenotypes.sh`)
+
+[scripts/load_rcnv_segments.sh](scripts/load_rcnv_segments.sh) loads the Collins et al. 2022 disease-associated rCNV segments (truncates `rcnv_segments`)
+
+[scripts/load_rcnv_window_associations.sh](scripts/load_rcnv_window_associations.sh) loads the Collins et al. 2022 sliding-window rCNV associations (truncates `rcnv_window_associations`)
+
 [scripts/load_cellxgene.sh](scripts/load_cellxgene.sh) replaces every `cellxgene_*` table with one CELLxGENE release in a single transaction (`load_data.py --transaction SPEC.json`: every file is staged and counted against the release manifest first, so a failure changes nothing); the munge pipeline's driver runs it before flipping the release pointer
 
 ## Server setup
@@ -205,6 +211,7 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 - **coloc_credsets** — variants in colocalized credible sets
 - **exome_variant_results** — exome variant associations (Genebass, IBD exome)
 - **gene_burden_results** — gene burden test results, unfiltered (Genebass, BipEx2, IBD exome, SCHEMA2, BRaVa)
+- **exome_gene_counts**, **exome_gene_bayes_results**, **exome_variant_counts** — count-based exome studies (ASC 2026 autism release): per-gene counts by variant class x inheritance mode, a per-gene Bayes factor and Bayesian FDR, and per-variant counts; no p-values or effect sizes
 - **asm_qtl** — allele-specific methylation QTL results (deCODE)
 - **gene_annotations** — whole-universe gene reference table (HGNC + GENCODE, gene-group lineage)
 - **open_chromatin** — atlas of accessible/active chromatin regions by cell type/tissue/condition
@@ -220,7 +227,7 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 - **rcnv_window_associations** — the same study's genome-wide sliding-window DEL/DUP association statistics, lifted to GRCh38 with the published GRCh37 interval kept (108 (phenotype, cnv_type) groups, 17,114-257,726 rows each, over 259,795 windows)
 - **phenotypes** — trait metadata behind the results tables' phenotype codes, keyed by `(dataset, trait_original)`
 - **datasets** — dataset registry: what each results-view `dataset` value is, its resource, version and credible-set caveats
-- **cellxgene_\*** — CELLxGENE single-cell expression by cell type (daly only): a cross-dataset summary, per-dataset rows, and the release's datasets, groups and measured genes; keys are release-local, so the tables are only ever replaced together
+- **cellxgene_\*** — CELLxGENE single-cell expression by cell type (daly only): a cross-dataset summary, per-dataset rows, and the release's datasets, groups and measured genes; keys are release-local, so the tables are only ever replaced together. Their views have no `exposed: true` entry in the canonical `datasets.yaml` `tables` block, so `/query`, `/schema` and `/tables/{name}/sample` do not serve them
 
 ## License
 

@@ -2,7 +2,7 @@
 # Build and load the phenotypes + datasets metadata tables (WRITE_TRUNCATE full rebuild).
 #
 # Both tables are derived entirely from datasets.yaml and the per-dataset metadata_file
-# JSON/TSVs it points at, so a full rebuild is always cheap (~33k + ~900 rows) and there is
+# JSON/TSVs it points at, so a full rebuild is always cheap (tens of thousands of rows) and there is
 # no incremental path: re-run this whenever datasets.yaml or a metadata file changes.
 #
 # datasets.yaml is the SYNCED copy in this repo's configs/ (see CLAUDE.md - the canonical

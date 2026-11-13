@@ -83,7 +83,7 @@ REGISTRY = {
         "metadata_file": "gs://x/ot_2609_data_studies.json", "metadata_harmonizer": "open_targets",
     },
     "eqtl_catalogue": {
-        "resource": "eqtl_catalogue", "version": "R8", "description": "collection",
+        "resource": "eqtl_catalogue", "version": "R8_pre", "description": "collection",
         "author": "eQTL Catalogue", "publication_date": "2026-01-01",
         "data_type": "mixed", "trait_type": "quantitative",
         "metadata_file": "gs://x/eqtl.tsv", "metadata_harmonizer": "eqtl_catalogue",
@@ -471,3 +471,88 @@ def test_on_request_entries_get_no_phenotype_rows_either():
     rows, _ = build_phenotypes(registry, metadata, ABSENT)
     assert not [r for r in rows if r["dataset"] == "FinnGen_R12_sex_specific"]
 
+
+
+INLINE_IBD = [
+    {"phenotype_code": "IBD", "phenotype_string": "Inflammatory bowel disease",
+     "n_cases": 86213, "n_controls": 478363, "n_samples": 564576},
+    {"phenotype_code": "CD", "phenotype_string": "Crohn's disease",
+     "n_cases": 44131, "n_controls": 478363},
+]
+
+INLINE_REGISTRY = {
+    "ibd_exome": {
+        "dataset": "IBD_exome", "resource": "ibd_exome_2026", "version": "2026",
+        "author": "IIBDGC", "publication_date": "NA", "data_type": "exome",
+        "trait_type": "binary", "metadata_file": None, "metadata_harmonizer": None,
+        "phenotypes": INLINE_IBD,
+    },
+    "ibd_gene_based": {
+        "dataset": "IBD_exome", "resource": "ibd_exome_2026", "version": "2026",
+        "author": "IIBDGC", "publication_date": "NA", "data_type": "gene_based",
+        "trait_type": "binary", "metadata_file": None, "metadata_harmonizer": None,
+        "phenotypes": INLINE_IBD,
+    },
+}
+
+
+def test_inline_phenotypes_reach_the_table_when_the_entry_has_no_metadata_file():
+    rows, _ = build_phenotypes(INLINE_REGISTRY, {}, ABSENT)
+    by_code = {r["trait_original"]: r for r in rows}
+    assert set(by_code) == {"IBD", "CD"}
+    ibd = by_code["IBD"]
+    assert ibd["dataset"] == "IBD_exome" and ibd["resource"] == "ibd_exome_2026"
+    assert ibd["trait_name"] == "Inflammatory bowel disease"
+    assert (ibd["n_cases"], ibd["n_controls"], ibd["n_samples"]) == (86213, 478363, 564576)
+    assert ibd["trait_type"] == "binary" and ibd["category"] is None
+    assert ibd["author"] == "IIBDGC" and ibd["version"] == "2026"
+    assert ibd["publication_date"] is None  # "NA" is not a date
+    assert ibd["contributing_cohorts"] == []
+    # no stated total: cases plus controls
+    assert by_code["CD"]["n_samples"] == 44131 + 478363
+
+
+def test_two_products_of_one_dataset_listing_the_same_phenotypes_give_one_row_each():
+    """the burden and the variant entry of an exome release share a `dataset` value"""
+    rows, dropped = build_phenotypes(INLINE_REGISTRY, {}, ABSENT)
+    assert len(rows) == 2
+    assert {r["dataset_id"] for r in rows} == {"ibd_exome"}
+    assert {dataset_id for _, dataset_id in dropped} == {"ibd_gene_based"}
+
+
+def test_a_metadata_file_wins_over_the_inline_list():
+    registry = {"ibd_gwas": {
+        "dataset": "IIBDGC", "resource": "ibd_gwas", "version": "2026", "author": "IIBDGC",
+        "data_type": "gwas", "trait_type": "binary",
+        "metadata_file": "gs://x/ibd.json", "metadata_harmonizer": "finngen_r13",
+        "phenotypes": [{"phenotype_code": "IBD", "phenotype_string": "inline name"}],
+    }}
+    metadata = {"ibd_gwas": [{"phenocode": "IBD", "phenostring": "file name",
+                              "num_cases": 10, "num_controls": 20}]}
+    rows, _ = build_phenotypes(registry, metadata, ABSENT)
+    assert [(r["trait_original"], r["trait_name"]) for r in rows] == [("IBD", "file name")]
+
+
+def test_the_inline_list_stands_in_for_a_metadata_file_that_is_not_staged():
+    """a profile whose bucket lacks the file keeps the path null but the harmonizer set"""
+    registry = {"ibd_gwas": {
+        "dataset": "IIBDGC", "resource": "ibd_gwas", "version": "2026", "author": "IIBDGC",
+        "data_type": "gwas", "trait_type": "binary",
+        "metadata_file": None, "metadata_harmonizer": "finngen_r13",
+        "phenotypes": [{"phenotype_code": "IBD", "phenotype_string": "inline name"}],
+    }}
+    rows, _ = build_phenotypes(registry, {}, ABSENT)
+    assert [(r["trait_original"], r["trait_name"]) for r in rows] == [("IBD", "inline name")]
+
+
+def test_inline_trait_type_is_not_taken_from_a_mixed_dataset():
+    registry = {"mixed": {**INLINE_REGISTRY["ibd_exome"], "trait_type": "mixed"}}
+    rows, _ = build_phenotypes(registry, {}, ABSENT)
+    assert rows and all(r["trait_type"] is None for r in rows)
+
+
+def test_inline_phenotypes_of_an_entry_with_no_results_view_dataset_emit_nothing():
+    """served by results-api only: a row would join no results view"""
+    entry = {k: v for k, v in INLINE_REGISTRY["ibd_exome"].items() if k != "dataset"}
+    rows, _ = build_phenotypes({"sumstats_only": entry}, {}, ABSENT)
+    assert rows == []
