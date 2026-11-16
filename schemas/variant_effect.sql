@@ -3,14 +3,14 @@
 -- Model-generic: the `model` column distinguishes chrombpnet / flare (and future models).
 -- One row per variant per model per context (LONG layout).
 -- Partitioned by chromosome, clustered by dataset, tissue, model for efficient querying.
--- chr is stored as INT64 (chrX=23, chrY=24, chrM/MT=25) even though the canonical/tabix
+-- chr is stored as INT64 (chrX=23, chrY=24, chrM/MT=26) even though the canonical/tabix
 -- source TSV encodes chrom as a chr-prefixed string ("chr1".."chrX"); the loader converts.
 -- `variant` (chr:pos:ref:alt) is stored (not view-derived) because the shared canonical TSV
 -- served to the API already carries it, keeping the positional CSV load aligned.
 
 CREATE TABLE IF NOT EXISTS `genetics_results.variant_effect`
 (
-  chr INT64 NOT NULL OPTIONS(description="Chromosome (INT64; X=23, Y=24, M/MT=25)"),
+  chr INT64 NOT NULL OPTIONS(description="Chromosome (INT64; X=23, Y=24, M/MT=26)"),
   pos INT64 NOT NULL OPTIONS(description="Variant position (1-based)"),
   ref STRING NOT NULL OPTIONS(description="Reference allele"),
   alt STRING NOT NULL OPTIONS(description="Alternate allele"),

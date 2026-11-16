@@ -3,9 +3,10 @@
 -- file the genetics-results-api serves. Kept apart from variant_annotation so that
 -- table's unfiltered queries stay FinnGen-sized.
 --
--- The partition range ends at 26 because the upper bound is exclusive and the suite's
--- chromosome codes run to 25 (X=23, Y=24, M=25); a code outside the range would land in
--- the catch-all partition, where a `chr =` filter still prunes but nothing else does.
+-- The partition range ends at 26, exclusive, so it covers 1..22, X=23 and Y=24. The suite's
+-- mitochondrial code is 26 and would land in the catch-all partition, where a `chr =`
+-- filter still prunes but nothing else does; the gnomAD file this table is loaded from
+-- carries no mitochondrial contig.
 --
 -- Clustered by pos alone: a point lookup (`chr = AND pos =`) and a region scan
 -- (`chr = AND pos BETWEEN`) are the two shapes that must stay cheap on a table this

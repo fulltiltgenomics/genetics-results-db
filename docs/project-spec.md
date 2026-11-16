@@ -326,7 +326,7 @@ Atlas of accessible/active chromatin regions labeled by cell type, tissue and co
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=26) |
 | peak_start | INT64 | Yes | Peak/region start position (0-based BED start) |
 | peak_end | INT64 | Yes | Peak/region end position |
 | peak_id | STRING | No | Source peak/element identifier |
@@ -351,7 +351,7 @@ In-silico *predicted* effects of variants on chromatin accessibility from deep-l
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=26) |
 | pos | INT64 | Yes | Variant position (1-based) |
 | ref | STRING | Yes | Reference allele |
 | alt | STRING | Yes | Alternate allele |
@@ -376,7 +376,7 @@ In-silico *predicted* effects of variants on chromatin accessibility from deep-l
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=26) |
 | pos | INT64 | Yes | Variant position (1-based) |
 | variant | STRING | No | Variant identifier (chr:pos:ref:alt) |
 | ref | STRING | Yes | Reference allele |
@@ -1068,7 +1068,9 @@ genetics-results-db/
 ├── tests/                     # None queries BigQuery unless noted, but importing api.main constructs a
 │                              #   bigquery.Client, so those that import it need Application Default
 │                              #   Credentials to resolve; several read the synced configs/datasets.yaml directly
+│   ├── checkout_guard.py      # the foreign-checkout check conftest calls; written by genetics-results-suite's scripts/vendor.py, never edited here
 │   ├── conftest.py            # Foreign-checkout guard + auth env restore
+│   ├── sandbox_contract.py    # the token and budget tests shared with results-api, plus their ASGI driver and minter; written by scripts/vendor.py, never edited here
 │   ├── test_api_auth.py       # Shared-secret authentication tests (never reach BigQuery)
 │   ├── test_authorize_query_errors.py  # /query error mapping per BigQuery exception (stubbed)
 │   ├── test_build_gene_annotations.py  # gene_annotations build unit tests
@@ -1360,6 +1362,11 @@ Filters to cis colocalizations (QTL lead variant within ±1 Mb of the gene). Dro
 `scripts/lint-staged.sh` runs ruff over the **staged** Python files from the `pre-commit`
 hook and **fails the commit** when anything is reported. `git commit --no-verify` is the
 bypass. It is the one pre-commit check that blocks; `scripts/check-doc-drift.sh` only warns.
+
+The hook scripts are not this repo's own: `scripts/lint-staged.sh`, `scripts/install-git-hooks.sh`
+and `scripts/doc-drift-lib.sh` are copies genetics-results-suite's `scripts/vendor.py` writes
+(`configs/vendored.yaml` there). Edit them in that repo; only the rules in
+`scripts/check-doc-drift.sh` are maintained here.
 
 - **Staged, not repo-wide.** A finding in a file the commit does not touch never blocks it.
   The other side of that coin is that a pre-existing finding is only ever cleared by

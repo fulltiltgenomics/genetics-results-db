@@ -217,7 +217,7 @@ SCHEMAS = {
     # chrom, start, end, peak_id, dataset, cell_type, tissue, life_stage, condition,
     # assay, score, score_type, n_cells, cell_ontology_id, uberon_id, target_gene,
     # target_gene_id, version). The source chrom is a numeric string (X=23,Y=24,
-    # M=25); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES staging.
+    # M=26); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES staging.
     "open_chromatin": [
         bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
         bigquery.SchemaField("peak_start", "INT64", mode="REQUIRED"),
@@ -242,7 +242,7 @@ SCHEMAS = {
     # chrom, pos, ref, alt, variant, rsid, dataset, model, cell_type, tissue,
     # life_stage, score, score_type, mlog10p, predicted_direction, quantile_rank,
     # is_significant, version). The source chrom is a numeric string (X=23,Y=24,
-    # M=25); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES staging.
+    # M=26); it is loaded to the INT64 `chr` column via CHR_STRING_TABLES staging.
     "variant_effect": [
         bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
         bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
@@ -266,7 +266,7 @@ SCHEMAS = {
     # column order must match TSV file exactly (canonical mpra LONG layout:
     # chrom, pos, variant, ref, alt, cohort, cell_line, emVar, active, log2Skew,
     # log2Skew_se, log2Skew_mlog10p, log2FC, log2FC_mlog10p, mean_RNA_ref,
-    # mean_RNA_alt). The source chrom is a numeric string (X=23,Y=24,M=25); it is
+    # mean_RNA_alt). The source chrom is a numeric string (X=23,Y=24,M=26); it is
     # loaded to the INT64 `chr` column via CHR_STRING_TABLES staging. `dataset` is
     # not in the file — it is injected at load with --const-column dataset=siraj_mpra.
     "mpra": [
@@ -720,7 +720,7 @@ JSON_SCHEMAS = {"gene_annotations", "phenotypes", "datasets"}
 
 # tables whose source TSV encodes the `chr` column as a string but whose BigQuery
 # column is INT64. The same file is served to the tabix API, whose seqnames are now
-# numeric ("1".."25", X=23/Y=24/M=25), so the source chrom is already numeric. These
+# numeric ("1".."24" and "26", X=23/Y=24/M=26), so the source chrom is already numeric. These
 # tables are always routed through the staging path: `chr` is loaded as STRING, then
 # converted to INT64 on projection. The conversion still tolerates a legacy "chr"
 # prefix and X/Y/M spellings so mixed inputs load consistently.
@@ -746,7 +746,7 @@ UNQUOTED_TABLES = {"gnomad_variant_annotation"}
 CELL_TYPE_STRIP_PREFIX_SQL = "REGEXP_REPLACE({col}, r'^predicted\\.celltype\\.', '')"
 
 # SQL to normalize a chrom string to the INT64 encoding used across the tables:
-# X=23, Y=24, M/MT=25 (mirrors chrom_to_int() in build_gene_annotations.py).
+# X=23, Y=24, M/MT=26 (mirrors chrom_to_int() in build_gene_annotations.py).
 # Numeric input (e.g. "23") SAFE_CASTs straight through; any leading "chr" is
 # stripped first. Non-matching values become NULL and fail the REQUIRED chr
 # constraint, surfacing malformed input rather than dropping it.
@@ -754,8 +754,8 @@ CHR_STRING_TO_INT_SQL = (
     "CASE UPPER(REGEXP_REPLACE({col}, r'(?i)^chr', ''))"
     " WHEN 'X' THEN 23"
     " WHEN 'Y' THEN 24"
-    " WHEN 'M' THEN 25"
-    " WHEN 'MT' THEN 25"
+    " WHEN 'M' THEN 26"
+    " WHEN 'MT' THEN 26"
     " ELSE SAFE_CAST(REGEXP_REPLACE({col}, r'(?i)^chr', '') AS INT64)"
     " END"
 )

@@ -75,14 +75,14 @@ def test_chrom_to_int_string_encoding():
     assert chrom_to_int("X") == 23
     assert chrom_to_int("chrX") == 23
     assert chrom_to_int("Y") == 24
-    assert chrom_to_int("M") == 25
-    assert chrom_to_int("MT") == 25
+    assert chrom_to_int("M") == 26
+    assert chrom_to_int("MT") == 26
     assert chrom_to_int("7") == 7
     assert chrom_to_int("GL000.1") is None
 
 
 def test_chrom_to_int_integer_encoded_passthrough():
-    # already-integer-encoded files: 23=X, 24=Y, 25/26=M/MT pass through unchanged
+    # an already-integer value in 1..26 passes through unchanged, whatever it stands for
     assert chrom_to_int("23") == 23
     assert chrom_to_int("24") == 24
     assert chrom_to_int("25") == 25

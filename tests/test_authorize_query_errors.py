@@ -27,7 +27,6 @@ from google.api_core.exceptions import BadRequest, Forbidden, NotFound
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from test_sandbox_token_auth import _reload  # noqa: E402
 
 SQL = "SELECT * FROM some_table"
 
@@ -77,14 +76,6 @@ class GateBQ:
         if self._raises is not None:
             raise self._raises
         return _Job(self._statement_type, self._referenced_tables)
-
-
-@pytest.fixture(scope="module")
-def main():
-    mp = pytest.MonkeyPatch()
-    module = _reload(mp)
-    yield module
-    mp.undo()
 
 
 @pytest.fixture

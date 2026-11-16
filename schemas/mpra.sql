@@ -3,8 +3,8 @@
 -- (Siraj et al. 2026 MPRA). One row per variant per cell_line (LONG layout), where
 -- cell_line is 'meta' (cross-cell-line meta-analysis) or one of the 5 tested lines.
 -- Partitioned by chromosome, clustered by dataset, cell_line for efficient querying.
--- chr is stored as INT64 (chrX=23, chrY=24, chrM/MT=25) even though the canonical/tabix
--- source TSV encodes chrom as a numeric string ("1".."25"); the loader converts.
+-- chr is stored as INT64 (chrX=23, chrY=24, chrM/MT=26) even though the canonical/tabix
+-- source TSV encodes chrom as a numeric string ("1".."24", "26"); the loader converts.
 -- `variant` (chr:pos:ref:alt) is stored (not view-derived) because the shared canonical TSV
 -- served to the API already carries it, keeping the positional CSV load aligned.
 -- emVar/active are BOOL: the source cells are literal TRUE/FALSE (NA -> NULL), which the
@@ -12,7 +12,7 @@
 
 CREATE TABLE IF NOT EXISTS `genetics_results.mpra`
 (
-  chr INT64 NOT NULL OPTIONS(description="Chromosome (INT64; X=23, Y=24, M/MT=25)"),
+  chr INT64 NOT NULL OPTIONS(description="Chromosome (INT64; X=23, Y=24, M/MT=26)"),
   pos INT64 NOT NULL OPTIONS(description="Variant position (1-based)"),
   variant STRING OPTIONS(description="Variant identifier (chr:pos:ref:alt)"),
   ref STRING NOT NULL OPTIONS(description="Reference allele"),

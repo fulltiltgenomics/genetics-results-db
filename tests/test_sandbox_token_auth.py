@@ -5,50 +5,37 @@ The properties that matter are all failure properties: a sandbox-shaped bearer m
 degrade into the shared-secret comparison, must never be accepted when the signing key is
 unset, and must never authorize a token minted for the other service.
 
+What both validators must refuse is tests/sandbox_contract.py's `TokenContract`, collected
+here as `TestTokenContract` and driven through require_auth on the real app. This file holds
+what is db-api's own: the routing ahead of the shared-secret comparison, when the signing key
+is read, and the startup gate.
+
 api.main constructs a BigQuery client at module scope, which is offline (no RPC until a query
 runs), so every case here is decided by require_auth before a handler executes.
 """
 
 import base64
+import functools
 import importlib
-import json
 import logging
 import os
 import sys
-import time
 
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from sandbox_contract import SIGNING_KEY, TokenContract, mint_token
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 SECRET = "test-internal-secret"
-SIGNING_KEY = "test-sandbox-signing-key-that-is-32-bytes+"
 
 # app-level dependencies run after routing, so an unknown path 404s before require_auth ever
 # fires; /openapi.json is a real route and is deliberately behind the same dependency
 PROTECTED_PATH = "/openapi.json"
 
 
-def _mint(key=SIGNING_KEY, audience="db-api", issuer="chat-backend", age=0, ttl=300, **over):
-    iat = int(time.time()) - age
-    claims = {
-        "iss": issuer,
-        "aud": audience,
-        "sub": "user@finngen.fi",
-        "sid": "session-abc",
-        "jti": "exec-123",
-        "iat": iat,
-        "exp": iat + ttl,
-        "scope": "query:views",
-    }
-    for k, v in over.items():
-        if v is None:
-            claims.pop(k, None)
-        else:
-            claims[k] = v
-    return jwt.encode(claims, key, algorithm="HS256")
+_mint = functools.partial(mint_token, audience="db-api")
 
 
 def _reload(monkeypatch, **env):
@@ -105,82 +92,18 @@ def test_valid_sandbox_token_is_authorized(client):
     assert _get(client, _mint()).status_code != 401
 
 
-def test_expired_token_is_rejected(client):
-    """5-minute lifetime is the whole reason a leaked token is worth little."""
-    assert _get(client, _mint(age=400, ttl=300)).status_code == 401
+@pytest.fixture
+def accepts(client):
+    """Whether require_auth let the bearer through; what the handler then answers is not it."""
+    return lambda token: _get(client, token).status_code != 401
 
 
-def test_backdated_iat_is_rejected(client):
-    """PyJWT accepts an ancient iat as long as exp is future; a long-ttl token must not work."""
-    assert _get(client, _mint(age=3600, ttl=7200)).status_code == 401
-
-
-@pytest.mark.parametrize("claim", ["iss", "aud", "sub", "sid", "jti", "iat", "exp", "scope"])
-def test_every_required_claim_is_required(client, claim):
-    assert _get(client, _mint(**{claim: None})).status_code == 401
-
-
-def test_foreign_issuer_is_rejected(client):
-    assert _get(client, _mint(issuer="someone-else")).status_code == 401
-
-
-# --- audience binding: a results-api token must not work here ------------------------------
-
-
-def test_results_api_token_cannot_be_replayed_at_db_api(client):
-    """Same signing key, same everything, different aud. This is the replay control."""
-    assert _get(client, _mint(audience="results-api")).status_code == 401
-
-
-def test_multi_audience_token_is_rejected(client):
-    """PyJWT reads a list `aud` as membership, so this would otherwise validate at BOTH
-    services and one-token-per-audience would be a minter property, not a validator one."""
-    assert _get(client, _mint(audience=["db-api", "results-api"])).status_code == 401
-
-
-def test_single_element_list_audience_is_also_rejected(client):
-    assert _get(client, _mint(audience=["db-api"])).status_code == 401
-
-
-# --- attribution: the token must name somebody -----------------------------------------------
-
-
-@pytest.mark.parametrize("claim", ["sub", "sid", "jti"])
-def test_empty_attribution_claim_is_rejected(client, claim):
-    """`options={"require": ...}` only rejects missing/null; an empty string attributes the
-    query to nobody, which defeats the point of the credential."""
-    assert _get(client, _mint(**{claim: ""})).status_code == 401
-
-
-# --- clock skew ------------------------------------------------------------------------------
-
-
-def test_freshly_minted_token_from_a_slightly_fast_minter_is_accepted(client):
-    """iat 3s in the future: PyJWT >= 2.10 raises ImmatureSignatureError with leeway=0, and the
-    minter and this service are different pods with different clocks."""
-    assert _get(client, _mint(age=-3)).status_code != 401
-
-
-def test_leeway_does_not_widen_the_300s_iat_bound(client):
-    """The MAX_TOKEN_AGE_SECONDS check is separate from the decoder and stays exact."""
-    assert _get(client, _mint(age=299, ttl=600)).status_code != 401
-    assert _get(client, _mint(age=301, ttl=600)).status_code == 401
+class TestTokenContract(TokenContract):
+    audience = "db-api"
+    other_audience = "results-api"
 
 
 # --- signature -----------------------------------------------------------------------------
-
-
-def test_wrong_signing_key_is_rejected(client):
-    assert _get(client, _mint(key="a-different-key-also-32-bytes-long!")).status_code == 401
-
-
-def test_tampered_payload_is_rejected(client):
-    token = _mint()
-    header, payload, signature = token.split(".")
-    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    claims["sub"] = "attacker@example.com"
-    forged = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
-    assert _get(client, f"{header}.{forged}.{signature}").status_code == 401
 
 
 def test_alg_none_is_rejected(client):

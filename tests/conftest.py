@@ -21,6 +21,11 @@ from pathlib import Path
 
 import pytest
 
+# before anything imports it: its asserts are test assertions
+pytest.register_assert_rewrite("sandbox_contract")
+
+from checkout_guard import refuse_foreign_namespace_package  # noqa: E402
+
 _AUTH_ENV = ("INTERNAL_API_SECRET", "SANDBOX_TOKEN_SIGNING_KEY", "SANDBOX_ENABLED")
 
 
@@ -60,22 +65,19 @@ sys.path.insert(0, str(ROOT))
 
 
 def pytest_configure(config):
-    import api
+    refuse_foreign_namespace_package(config, "api")
 
-    rootdir = Path(config.rootpath).resolve()
-    outside = [p for p in api.__path__ if not Path(p).resolve().is_relative_to(rootdir)]
-    if outside:
-        raise pytest.UsageError(
-            "the `api` namespace package spans directories OUTSIDE the tree pytest is "
-            "testing, so this run can import another checkout's source and report green.\n"
-            "    outside this tree : " + ", ".join(outside) + "\n"
-            f"    pytest rootdir    : {rootdir}\n"
-            f"    interpreter       : {sys.executable}\n"
-            f"    PYTHONPATH        : {os.environ.get('PYTHONPATH', '(unset)')}\n"
-            f"Almost always PYTHONPATH points at another checkout. Fix, from {rootdir}:\n"
-            "    unset PYTHONPATH\n"
-            "    uv sync --extra dev\n"
-            '    uv run python -c "import api, sys; print(list(api.__path__)); '
-            'print(sys.executable)"\n'
-            f"Every printed path must be under {rootdir}."
-        )
+
+@pytest.fixture(scope="module")
+def main():
+    """api.main reloaded under the test environment, once per module that asks for it.
+
+    A module that needs a different environment defines its own `main`, which wins.
+    """
+    # imported here so collecting conftest does not import a test module
+    from test_sandbox_token_auth import _reload
+
+    mp = pytest.MonkeyPatch()
+    module = _reload(mp)
+    yield module
+    mp.undo()

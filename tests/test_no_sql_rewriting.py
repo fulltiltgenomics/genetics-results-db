@@ -27,7 +27,6 @@ from google.cloud import bigquery
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from test_sandbox_token_auth import _reload  # noqa: E402
 
 # names of the successive rewrite implementations and their helpers; each was deleted after
 # it was found to be emulating a scoping rule it could not get right
@@ -85,14 +84,6 @@ class RecordingBQ:
     def query(self, sql, job_config=None):
         self.calls.append((sql, job_config))
         return _Job(self._project, self._dataset_id)
-
-
-@pytest.fixture(scope="module")
-def main():
-    mp = pytest.MonkeyPatch()
-    module = _reload(mp)
-    yield module
-    mp.undo()
 
 
 @pytest.fixture
