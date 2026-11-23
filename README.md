@@ -28,6 +28,8 @@ The loaders run the Python helpers through the interpreter `scripts/lib/common.s
 
 [scripts/load_asc.sh](scripts/load_asc.sh) loads the ASC 2026 autism exome release into `exome_gene_counts`, `exome_gene_bayes_results` and `exome_variant_counts` (deletes its own `dataset = 'ASC2'` rows from each first, then appends; run before `load_phenotypes.sh`)
 
+[scripts/load_schema2_variant_counts.sh](scripts/load_schema2_variant_counts.sh) loads the SCHEMA2 per-variant allele counts into `exome_variant_counts` (deletes its own `dataset = 'SCHEMA2'` rows first, then appends)
+
 [scripts/load_asm_qtl.sh](scripts/load_asm_qtl.sh) loads ASM-QTL (allele-specific methylation) results
 
 [scripts/load_peak_to_gene.sh](scripts/load_peak_to_gene.sh) loads Open4Gene peak-to-gene links (truncates `peak_to_gene`), which join peak-keyed caQTL credible sets to genes
@@ -211,7 +213,7 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 - **coloc_credsets** — variants in colocalized credible sets
 - **exome_variant_results** — exome variant associations (Genebass, IBD exome)
 - **gene_burden_results** — gene burden test results, unfiltered (Genebass, BipEx2, IBD exome, SCHEMA2, BRaVa)
-- **exome_gene_counts**, **exome_gene_bayes_results**, **exome_variant_counts** — count-based exome studies (ASC 2026 autism release): per-gene counts by variant class x inheritance mode, a per-gene Bayes factor and Bayesian FDR, and per-variant counts; no p-values or effect sizes
+- **exome_gene_counts**, **exome_gene_bayes_results**, **exome_variant_counts** — count-based exome studies (ASC 2026 autism release): per-gene counts by variant class x inheritance mode, a per-gene Bayes factor and Bayesian FDR, and per-variant counts; no p-values or effect sizes. `exome_variant_counts` also holds the SCHEMA2 per-variant case/control allele counts and allele numbers
 - **asm_qtl** — allele-specific methylation QTL results (deCODE)
 - **gene_annotations** — whole-universe gene reference table (HGNC + GENCODE, gene-group lineage)
 - **open_chromatin** — atlas of accessible/active chromatin regions by cell type/tissue/condition
