@@ -8,57 +8,50 @@ execution may make BigQuery scan. It bounds nothing about what that execution co
 because the paths that run no BigQuery job charge it nothing: `/health`, `/docs`, `/redoc`,
 `/openapi.json`, an unmatched path, `/schema` on a categorical-value cache hit, `/stats`'
 metadata loop. db-api is `replicas: 1` and is on the browser's chat path, so those are what
-these limits exist for. The properties under test:
+these limits exist for.
+
+The rules both services enforce identically are tests/sandbox_contract.py's `BudgetContract`,
+collected here as `TestBudgetContract`. The properties under test in this file are db-api's own:
 
   * a request carrying no sandbox token is bound by NONE of them, with every limit set to 1 —
     chat-backend, mcp-server and the `/health` probe must be unaffected, which is the single
     most important property here;
-  * the request-count limit answers 429 on its own, before any handler work;
-  * concurrency is *rejected*, not queued, per execution and pod-wide;
   * an unmatched path is COUNTED and RELEASES its slot — the assertion that pins the gate to
     middleware rather than to a dependency teardown;
   * a slot is released when the handler raises;
-  * the counter map is bounded and its sweep can never evict a live execution.
+  * the sweep evicts only an execution whose token is dead;
+  * the gate is registered on the real app, and refuses an inverted concurrency pair at import.
 """
 
-import asyncio
+import functools
 import importlib
-import json
 import os
 import sys
 import time
-from urllib.parse import urlencode
 
-import jwt
 import pytest
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
+from sandbox_contract import (
+    SIGNING_KEY,
+    BudgetContract,
+    add_budget_routes,
+    bearer,
+    call_asgi,
+    concurrent,
+    get,
+    mint_token,
+)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api import sandbox_auth, sandbox_budget  # noqa: E402
 
 SECRET = "test-internal-secret"
-SIGNING_KEY = "test-sandbox-signing-key-that-is-32-bytes+"
 
 _HANDLER_CALLS: list[str] = []
 
-
-def _mint(jti="exec-123", ttl=300, **over):
-    iat = int(time.time())
-    claims = {
-        "iss": "chat-backend",
-        "aud": "db-api",
-        "sub": "user@finngen.fi",
-        "sid": "session-abc",
-        "jti": jti,
-        "iat": iat,
-        "exp": iat + ttl,
-        "scope": "query:views",
-    }
-    claims.update(over)
-    return jwt.encode(claims, SIGNING_KEY, algorithm="HS256")
+_mint = functools.partial(mint_token, audience="db-api")
 
 
 @pytest.fixture(autouse=True)
@@ -77,59 +70,6 @@ def clean_state():
 
 
 # --- harness --------------------------------------------------------------------------------
-
-
-class _Response:
-    def __init__(self, status: int, body: bytes):
-        self.status_code, self.content = status, body
-
-    def json(self):
-        return json.loads(self.content)
-
-
-def _scope(path: str, query: str, headers):
-    return {
-        "type": "http",
-        "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1",
-        "method": "GET",
-        "scheme": "http",
-        "path": path,
-        "raw_path": path.encode(),
-        "query_string": query.encode(),
-        "root_path": "",
-        "headers": [(k.lower().encode(), v.encode()) for k, v in headers],
-        "client": ("testclient", 50000),
-        "server": ("testserver", 80),
-        "state": {},
-    }
-
-
-async def _acall(api, path, query="", headers=()) -> _Response:
-    """Drive the ASGI app directly: TestClient cannot hold one request open while it issues
-    another, which every concurrency assertion below needs."""
-    messages = []
-    received = []
-
-    async def receive():
-        if not received:
-            received.append(True)
-            return {"type": "http.request", "body": b"", "more_body": False}
-        await asyncio.Event().wait()
-
-    async def send(message):
-        messages.append(message)
-
-    try:
-        await api(_scope(path, query, headers), receive, send)
-    except RuntimeError as exc:  # the /raises endpoint, re-raised by ServerErrorMiddleware
-        if str(exc) != "handler exploded":
-            raise
-    start = next(m for m in messages if m["type"] == "http.response.start")
-    body = b"".join(
-        bytes(m.get("body", b"")) for m in messages if m["type"] == "http.response.body"
-    )
-    return _Response(start["status"], body)
 
 
 def _auth(request: Request) -> None:
@@ -153,34 +93,26 @@ def _auth(request: Request) -> None:
 def client():
     api = FastAPI(dependencies=[Depends(_auth)])
     api.add_middleware(sandbox_budget.SandboxBudgetMiddleware)
-
-    gate = asyncio.Event()
-    entered = asyncio.Event()
-
-    @api.get("/blob")
-    async def blob(n: int = 10):
-        _HANDLER_CALLS.append("blob")
-        return JSONResponse({"payload": "x" * n})
-
-    @api.get("/slow")
-    async def slow():
-        _HANDLER_CALLS.append("slow")
-        entered.set()
-        await gate.wait()
-        return JSONResponse({"ok": True})
+    add_budget_routes(api, _HANDLER_CALLS)
 
     @api.get("/raises")
     async def raises():
         _HANDLER_CALLS.append("raises")
         raise RuntimeError("handler exploded")
 
-    api.state.gate, api.state.entered = gate, entered
     return api
 
 
-def _get(client, path, token=None, **params):
-    headers = [("Authorization", f"Bearer {token}")] if token else []
-    return asyncio.run(_acall(client, path, urlencode(params), headers))
+class TestBudgetContract(BudgetContract):
+    budget = sandbox_budget
+    audience = "db-api"
+    handler_calls = _HANDLER_CALLS
+    spent_after_one_request = ("SANDBOX_MAX_REQUESTS_PER_EXECUTION", 1)
+    blob_size = 1
+
+    @staticmethod
+    def still_charged(entry):
+        return entry.requests == 1
 
 
 # --- 1. non-sandbox traffic is untouched. This is the property that keeps chat working. ------
@@ -195,132 +127,20 @@ def test_a_non_sandbox_caller_is_bound_by_none_of_them(client, monkeypatch):
     monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_TRACKED_EXECUTIONS", 1)
 
     for _ in range(5):
-        assert _get(client, "/blob", SECRET, n=100).status_code == 200
+        assert get(client, "/blob", SECRET, n=100).status_code == 200
 
-    second, held = _concurrent(client, SECRET, SECRET)
+    second, held = concurrent(client, SECRET, SECRET)
     assert (second.status_code, held.status_code) == (200, 200)
     assert sandbox_budget._executions == {}, "no entry is created for a non-sandbox caller"
 
 
-def test_an_unauthenticated_request_creates_no_accounting(client, monkeypatch):
-    """The kubelet and the monitor CronJob poll /health with no credentials at all."""
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_REQUESTS_PER_EXECUTION", 1)
-    for _ in range(3):
-        assert _get(client, "/blob", n=10).status_code == 401
-    assert sandbox_budget._executions == {}
-
-
-def test_an_invalid_sandbox_token_is_not_accounted(client):
-    """The gate's own resolver must not 401 or account for it; require_auth owns that."""
-    forged = jwt.encode({"aud": "db-api"}, "wrong-key", algorithm="HS256")
-    assert _get(client, "/blob", forged, n=10).status_code == 401
-    assert sandbox_budget._executions == {}
-
-
 def test_a_token_for_the_other_service_is_not_accounted(client):
     """`aud: results-api` fails verify_sandbox_token here, so it buys no slot on this pod."""
-    assert _get(client, "/blob", _mint(aud="results-api"), n=10).status_code == 401
+    assert get(client, "/blob", _mint(aud="results-api"), n=10).status_code == 401
     assert sandbox_budget._executions == {}
 
 
-# --- 2. the request-count limit -------------------------------------------------------------
-
-
-def test_the_request_count_limit_stops_a_loop(client, monkeypatch):
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_REQUESTS_PER_EXECUTION", 3)
-    token = _mint()
-
-    statuses = [_get(client, "/blob", token, n=1).status_code for _ in range(5)]
-
-    assert statuses == [200, 200, 200, 429, 429]
-
-
-def test_the_request_count_429_names_its_limit(client, monkeypatch):
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_REQUESTS_PER_EXECUTION", 1)
-    token = _mint()
-    _get(client, "/blob", token, n=1)
-    resp = _get(client, "/blob", token, n=1)
-
-    assert resp.status_code == 429
-    payload = resp.json()
-    assert payload["code"] == "sandbox_request_count"
-    assert (payload["limit"], payload["observed"]) == (1, 1)
-    assert "Request limit for this execution" in payload["detail"]
-
-
-def test_a_rejection_costs_no_handler_work(client, monkeypatch):
-    """Admitted before routing, so a spent execution costs no BigQuery job."""
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_REQUESTS_PER_EXECUTION", 1)
-    token = _mint()
-    _get(client, "/blob", token, n=1)
-    _HANDLER_CALLS.clear()
-
-    assert _get(client, "/blob", token, n=1).status_code == 429
-    assert _HANDLER_CALLS == []
-
-
-def test_the_count_is_per_execution_not_per_pod(client, monkeypatch):
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_REQUESTS_PER_EXECUTION", 1)
-    assert _get(client, "/blob", _mint(jti="exec-a"), n=1).status_code == 200
-    assert _get(client, "/blob", _mint(jti="exec-a"), n=1).status_code == 429
-    assert _get(client, "/blob", _mint(jti="exec-b"), n=1).status_code == 200
-
-
-# --- 3. concurrency: rejected, never queued -------------------------------------------------
-
-
-def _concurrent(client, first_token, second_token):
-    """Hold one request inside its handler, then issue a second and read its answer."""
-
-    async def scenario():
-        headers = [("Authorization", f"Bearer {first_token}")]
-        held = asyncio.create_task(_acall(client, "/slow", "", headers))
-        await asyncio.wait_for(client.state.entered.wait(), timeout=5)
-        try:
-            second = await _acall(
-                client, "/blob", "n=1", [("Authorization", f"Bearer {second_token}")]
-            )
-        finally:
-            client.state.gate.set()
-        return second, await asyncio.wait_for(held, timeout=5)
-
-    return asyncio.run(scenario())
-
-
-def test_a_second_concurrent_request_is_rejected_not_queued(client, monkeypatch):
-    """Queueing would burn the sandbox's 60-120s wall clock on a wait the script cannot see."""
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_CONCURRENT_REQUESTS", 1)
-    token = _mint()
-
-    second, held = _concurrent(client, token, token)
-
-    assert second.status_code == 429
-    payload = second.json()
-    assert payload["code"] == "sandbox_concurrency"
-    assert (payload["limit"], payload["observed"]) == (1, 1)
-    assert held.status_code == 200, "the held request still completes normally"
-    assert sandbox_budget.snapshot("exec-123").in_flight == 0
-
-
-def test_the_pod_wide_concurrency_limit_covers_distinct_executions(client, monkeypatch):
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_CONCURRENT_REQUESTS", 10)
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_CONCURRENT_REQUESTS_TOTAL", 1)
-
-    second, _held = _concurrent(client, _mint(jti="exec-a"), _mint(jti="exec-b"))
-
-    assert second.status_code == 429
-    assert second.json()["code"] == "sandbox_concurrency_pod"
-
-
-def test_the_slot_is_released_so_the_next_request_succeeds(client, monkeypatch):
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_CONCURRENT_REQUESTS", 1)
-    token = _mint()
-
-    for _ in range(3):
-        assert _get(client, "/blob", token, n=1).status_code == 200
-
-
-# --- 4. nothing may strand a slot -----------------------------------------------------------
+# --- 2. nothing may strand a slot -----------------------------------------------------------
 
 
 def test_an_unmatched_route_is_counted_and_releases_its_slot(client, monkeypatch):
@@ -334,12 +154,12 @@ def test_an_unmatched_route_is_counted_and_releases_its_slot(client, monkeypatch
     monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_CONCURRENT_REQUESTS", 1)
     token = _mint()
 
-    assert _get(client, "/no-such-route", token).status_code == 404
+    assert get(client, "/no-such-route", token).status_code == 404
     entry = sandbox_budget.snapshot("exec-123")
     assert entry is not None, "an unmatched path must still be counted"
     assert entry.requests == 1
     assert entry.in_flight == 0, "an unmatched route must not strand a concurrency slot"
-    assert _get(client, "/blob", token, n=1).status_code == 200, "and the slot is reusable"
+    assert get(client, "/blob", token, n=1).status_code == 200, "and the slot is reusable"
 
 
 def test_a_raising_handler_releases_its_slot(client, monkeypatch):
@@ -347,18 +167,26 @@ def test_a_raising_handler_releases_its_slot(client, monkeypatch):
     monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_CONCURRENT_REQUESTS", 1)
     token = _mint()
 
-    assert _get(client, "/raises", token).status_code == 500
+    # Starlette answers the 500 and then re-raises the handler's error for the server to log
+    resp = call_asgi(
+        client,
+        "GET",
+        "/raises",
+        headers=bearer(token),
+        tolerate=lambda exc: isinstance(exc, RuntimeError) and str(exc) == "handler exploded",
+    )
+    assert resp.status_code == 500
     entry = sandbox_budget.snapshot("exec-123")
     assert (entry.requests, entry.in_flight) == (1, 0)
-    assert _get(client, "/blob", token, n=1).status_code == 200
+    assert get(client, "/blob", token, n=1).status_code == 200
 
 
-# --- 5. the map is bounded, and its sweep never evicts a live execution ----------------------
+# --- 3. the sweep drops only a dead execution ------------------------------------------------
 
 
 def test_cleanup_drops_only_executions_whose_token_can_no_longer_authenticate(client):
-    _get(client, "/blob", _mint(jti="live"), n=1)
-    _get(client, "/blob", _mint(jti="expired", ttl=1), n=1)
+    get(client, "/blob", _mint(jti="live"), n=1)
+    get(client, "/blob", _mint(jti="expired", ttl=1), n=1)
 
     # far enough past `exp` that verify_sandbox_token's own leeway cannot still accept it
     with sandbox_budget._lock:
@@ -370,44 +198,7 @@ def test_cleanup_drops_only_executions_whose_token_can_no_longer_authenticate(cl
     )
 
 
-def test_cleanup_never_evicts_an_execution_with_a_request_in_flight(client):
-    async def scenario():
-        headers = [("Authorization", f"Bearer {_mint(jti='inflight', ttl=1)}")]
-        held = asyncio.create_task(_acall(client, "/slow", "", headers))
-        await asyncio.wait_for(client.state.entered.wait(), timeout=5)
-        with sandbox_budget._lock:
-            sandbox_budget._sweep_locked(time.time() + 3600)
-        survived = sandbox_budget.snapshot("inflight")
-        client.state.gate.set()
-        await asyncio.wait_for(held, timeout=5)
-        return survived
-
-    survived = asyncio.run(scenario())
-    assert survived is not None and survived.in_flight == 1
-
-
-def test_a_full_tracker_refuses_a_new_execution_rather_than_evicting_a_live_one(
-    client, monkeypatch
-):
-    monkeypatch.setattr(sandbox_budget, "SANDBOX_MAX_TRACKED_EXECUTIONS", 1)
-    _get(client, "/blob", _mint(jti="exec-a"), n=1)
-
-    resp = _get(client, "/blob", _mint(jti="exec-b"), n=1)
-
-    assert resp.status_code == 429
-    assert resp.json()["code"] == "sandbox_execution_tracker_full"
-    assert sandbox_budget.snapshot("exec-a").requests == 1
-
-    # the slot frees itself once the incumbent's token expires, with no operator action. This
-    # must use a *new* jti: re-using "exec-a" takes admit's `entry is not None` path and touches
-    # neither the sweep nor the tracker-full check.
-    with sandbox_budget._lock:
-        sandbox_budget._executions["exec-a"].expires_at = int(time.time()) - 3600
-    assert _get(client, "/blob", _mint(jti="exec-c"), n=1).status_code == 200
-    assert sandbox_budget.snapshot("exec-a") is None, "the expired incumbent was swept"
-
-
-# --- 6. the shipped defaults, and the gate as actually registered ---------------------------
+# --- 4. the shipped defaults, and the gate as actually registered ---------------------------
 
 
 def test_the_defaults_are_the_documented_numbers():
@@ -416,15 +207,6 @@ def test_the_defaults_are_the_documented_numbers():
     assert sandbox_budget.SANDBOX_MAX_CONCURRENT_REQUESTS == 4
     assert sandbox_budget.SANDBOX_MAX_CONCURRENT_REQUESTS_TOTAL == 8
     assert sandbox_budget.SANDBOX_MAX_TRACKED_EXECUTIONS == 4096
-
-
-@pytest.mark.parametrize("raw", ["0", "-1", "", "not-a-number", "4.5"])
-def test_a_nonsense_limit_fails_loudly_rather_than_rejecting_everything(monkeypatch, raw):
-    """Every limit is a ceiling compared with `>=`, so 0 or a negative silently turns it into
-    "reject every sandbox request" — a total outage no health check would attribute to a typo."""
-    monkeypatch.setenv("SANDBOX_MAX_REQUESTS_PER_EXECUTION", raw)
-    with pytest.raises(ValueError, match="positive integer"):
-        sandbox_budget._env_int("SANDBOX_MAX_REQUESTS_PER_EXECUTION", 1000)
 
 
 @pytest.mark.parametrize(

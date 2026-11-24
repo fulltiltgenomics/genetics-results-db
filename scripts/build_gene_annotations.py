@@ -36,7 +36,7 @@ def chrom_to_int(chrom: str | None) -> int | None:
     The exact encoding of the GENCODE file cannot be verified in this
     environment, so this handles BOTH known encodings:
       - STRING form: '1'..'22', 'X', 'Y', 'M'/'MT' (optionally 'chr'-prefixed)
-      - already-INTEGER-encoded form: '1'..'22', 23=X, 24=Y, 25=M, 26=MT
+      - already-INTEGER-encoded form: '1'..'22', 23=X, 24=Y, 26=M/MT
 
     Convention: 23=X, matching the integer chromosome encoding used by the other
     BigQuery views (Y/M/MT extend the same scheme). Any already-integer input in
@@ -54,7 +54,7 @@ def chrom_to_int(chrom: str | None) -> int | None:
     if c.isdigit():
         n = int(c)
         return n if 1 <= n <= 26 else None
-    return {"X": 23, "Y": 24, "M": 25, "MT": 25}.get(c)
+    return {"X": 23, "Y": 24, "M": 26, "MT": 26}.get(c)
 
 
 def strip_ensembl_version(ensembl_id: str | None) -> str | None:

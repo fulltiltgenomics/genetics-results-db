@@ -40,10 +40,12 @@ def load_resource_metadata(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     API-only marker.
     """
     resources = config.get("resources", {})
-    # resources with rows in no results view are kept out of the agent-facing metadata.
+    # resources no results view can be filtered on are kept out of the agent-facing metadata:
+    # those with rows in no view, and cellxgene, whose views carry no `resource` column (and
+    # which a profile without that data must not be told about).
     # pgc is deliberately NOT here: credible_sets_v carries PGC rows under it
     _API_ONLY_RESOURCES = {
-        "gtex", "hpa", "gencc", "monarch",
+        "gtex", "hpa", "gencc", "monarch", "cellxgene",
     }
 
     result: dict[str, dict[str, Any]] = {}

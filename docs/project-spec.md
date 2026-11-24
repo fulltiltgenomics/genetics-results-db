@@ -256,13 +256,13 @@ The tabix API is filtered differently: `/gene_based/{gene}` reads a combined mlo
 
 ### exome_gene_counts, exome_gene_bayes_results, exome_variant_counts
 
-The count-based exome family: studies whose release carries per-gene and per-variant **counts** and a Bayesian gene statistic, but no p-value, effect size or allele frequency. First and so far only source: the Autism Sequencing Consortium 2026 release (`dataset = 'ASC2'`, one trait `ASD`). They are separate from `gene_burden_results` / `exome_variant_results` because those require `mlog10p` and `beta`, and deriving either from counts would present a statistic the study never reported — nothing in these three tables is computed on the way in; the munge passes every value through as spelled.
+The count-based exome family: studies whose release carries per-gene and per-variant **counts** and a Bayesian gene statistic, but no p-value, effect size or allele frequency. First source: the Autism Sequencing Consortium 2026 release (`dataset = 'ASC2'`, one trait `ASD`), in all three tables. `exome_variant_counts` also holds the SCHEMA2 per-variant counts (`dataset = 'SCHEMA2'`, one trait `SCZ`); SCHEMA2 has no rows in the two gene tables. They are separate from `gene_burden_results` / `exome_variant_results` because those require `mlog10p` and `beta`, and deriving either from counts would present a statistic the study never reported — nothing in these three tables is computed on the way in; the munge passes every value through as spelled.
 
 - `exome_gene_counts` — LONG, one row per (dataset, trait, gene_id, variant_class, inheritance_mode): 7 classes (PTV, Mis2, Mis1, Mis0, synonymous, DEL, DUP) x 3 modes (de_novo, inherited, case_control), with `n_affected` / `n_unaffected` as the pair the mode contrasts (proband/sibling, transmitted/untransmitted, case/control). Every gene has all 21 rows, zeros included. These are the source's "independent" counts and are not sums over `exome_variant_counts`.
 - `exome_gene_bayes_results` — one row per (dataset, trait, gene_id): `bayes_factor`, `fdr`, `qc_flagged`. **Rank on `fdr`**: the Bayesian FDR is the running mean of (1 - PPA) down the BF-ranked list, so it is not a function of `bayes_factor` alone. The four `qc_flagged` genes are kept, flagged.
-- `exome_variant_counts` — one row per variant (7,045,130 for ASC2, chrX and chrY included, no CNVs), with the six source count columns under their source names plus consequence, class, MPC, AlphaMissense and gnomAD AF annotations. Not filtered on anything.
+- `exome_variant_counts` — one row per (dataset, variant, variant_class), no CNVs: ASC2 gives 20 "other splice" variants a second row, so the variant alone is not a key. ASC2: every variant in the release, chrX and chrY included, with the six source count columns under their source names plus consequence, class, MPC and AlphaMissense annotations. SCHEMA2: only the variants the source marks `in_analysis`, with case and control allele counts **and allele numbers** (`an_case`, `an_ctrl`) and a de novo count. A column a source does not carry is NULL for it, which is why only the columns both carry are NOT NULL; the per-dataset column coverage is stated in `schemas/exome_variant_counts.sql`.
 
-Column lists: `schemas/exome_gene_counts.sql`, `schemas/exome_gene_bayes_results.sql`, `schemas/exome_variant_counts.sql`; the loader's `SCHEMAS` entries in `scripts/load_data.py` must match the column order `genetics-results-munge/scripts/munge_asc.py` writes, and the null marker is `NA`. All three are partitioned by `chr` and clustered on `dataset, gene, trait` like the burden tables. `scripts/load_asc.sh` deletes `dataset = 'ASC2'` from each and appends, so it is idempotent and independent of the Genebass truncate; it must run before `load_phenotypes.sh` on a profile where the `asc_gene_based` / `asc_exome` registry entries are not listed in `ABSENT_FROM_RESULTS`.
+Column lists: `schemas/exome_gene_counts.sql`, `schemas/exome_gene_bayes_results.sql`, `schemas/exome_variant_counts.sql`; the loader's `SCHEMAS` entries in `scripts/load_data.py` must match the column order `genetics-results-munge/scripts/munge_asc.py` and `munge_schema2_variant_counts.py` write, and the null marker is `NA`. All three are partitioned by `chr` and clustered on `dataset, gene, trait` like the burden tables. `scripts/load_asc.sh` deletes `dataset = 'ASC2'` from each and appends, so it is idempotent and independent of the Genebass truncate; it must run before `load_phenotypes.sh` on a profile where the `asc_gene_based` / `asc_exome` registry entries are not listed in `ABSENT_FROM_RESULTS`. `scripts/load_schema2_variant_counts.sh` does the same for `dataset = 'SCHEMA2'` in `exome_variant_counts` alone.
 
 ### asm_qtl
 
@@ -328,7 +328,7 @@ Atlas of accessible/active chromatin regions labeled by cell type, tissue and co
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=26) |
 | peak_start | INT64 | Yes | Peak/region start position (0-based BED start) |
 | peak_end | INT64 | Yes | Peak/region end position |
 | peak_id | STRING | No | Source peak/element identifier |
@@ -353,7 +353,7 @@ In-silico *predicted* effects of variants on chromatin accessibility from deep-l
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=26) |
 | pos | INT64 | Yes | Variant position (1-based) |
 | ref | STRING | Yes | Reference allele |
 | alt | STRING | Yes | Alternate allele |
@@ -378,7 +378,7 @@ In-silico *predicted* effects of variants on chromatin accessibility from deep-l
 
 | Column | Type | Required | Description |
 |--------|------|----------|-------------|
-| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=25) |
+| chr | INT64 | Yes | Chromosome (X=23, Y=24, M/MT=26) |
 | pos | INT64 | Yes | Variant position (1-based) |
 | variant | STRING | No | Variant identifier (chr:pos:ref:alt) |
 | ref | STRING | Yes | Reference allele |
@@ -564,7 +564,7 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 
 ### gnomad_variant_annotation
 
-gnomAD genomes+exomes sites, one row per variant: frequencies overall and per genetic ancestry group, site filters, rsIDs and VEP consequences. It is loaded from the same bgzip+tabix file the genetics-results-api serves, and is a separate table from `variant_annotation` so that table's unfiltered queries stay FinnGen-sized.
+gnomAD genomes+exomes sites, one row per variant: frequencies overall and per genetic ancestry group, site filters, rsIDs and VEP consequences. `most_severe` and `gene_most_severe` are the consequence on a canonical transcript (protein-coding genes first) and that transcript's gene, by symbol or else Ensembl gene id; they are not VEP's most severe consequence over every transcript, which the `consequences` array still lets a query recompute. It is loaded from the same bgzip+tabix file the genetics-results-api serves, and is a separate table from `variant_annotation` so that table's unfiltered queries stay FinnGen-sized.
 
 Column list, partitioning and the reasoning behind both: `schemas/gnomad_variant_annotation.sql`. What a caller needs to know:
 
@@ -1011,7 +1011,7 @@ genetics-results-db/
 │   ├── exome_gene_counts_v.sql        # View with resource column
 │   ├── exome_gene_bayes_results.sql   # Count-based exome studies: per-gene Bayes factor and Bayesian FDR (ASC2)
 │   ├── exome_gene_bayes_results_v.sql # View with resource column
-│   ├── exome_variant_counts.sql       # Count-based exome studies: per-variant allele counts by inheritance mode (ASC2)
+│   ├── exome_variant_counts.sql       # Count-based exome studies: per-variant allele counts by inheritance mode (ASC2, SCHEMA2)
 │   ├── exome_variant_counts_v.sql     # View with variant and resource columns
 │   ├── asm_qtl.sql                    # deCODE allele-specific methylation QTL table
 │   ├── asm_qtl_v.sql                  # View with variant, maf and resource columns
@@ -1060,6 +1060,7 @@ genetics-results-db/
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
 │   ├── load_brava_gene.sh           # Append BRaVa gene burden results, unfiltered per-trait files (deletes dataset='BRaVa' first, no truncate)
 │   ├── load_asc.sh                  # Load the ASC 2026 autism exome release into the three count-based tables (deletes dataset='ASC2' first); run before load_phenotypes.sh
+│   ├── load_schema2_variant_counts.sh # Load the SCHEMA2 per-variant allele counts into exome_variant_counts (deletes dataset='SCHEMA2' first)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)
@@ -1095,7 +1096,9 @@ genetics-results-db/
 ├── tests/                     # None queries BigQuery unless noted, but importing api.main constructs a
 │                              #   bigquery.Client, so those that import it need Application Default
 │                              #   Credentials to resolve; several read the synced configs/datasets.yaml directly
+│   ├── checkout_guard.py      # the foreign-checkout check conftest calls; written by genetics-results-suite's scripts/vendor.py, never edited here
 │   ├── conftest.py            # Foreign-checkout guard + auth env restore
+│   ├── sandbox_contract.py    # the token and budget tests shared with results-api, plus their ASGI driver and minter; written by scripts/vendor.py, never edited here
 │   ├── test_api_auth.py       # Shared-secret authentication tests (never reach BigQuery)
 │   ├── test_authorize_query_errors.py  # /query error mapping per BigQuery exception (stubbed)
 │   ├── test_build_gene_annotations.py  # gene_annotations build unit tests
@@ -1171,7 +1174,7 @@ genetics-results-db/
 
    This script owns the genuinely fine-mapped credible sets, including `PGC_SCZ_2022` (the published PGC schizophrenia FINEMAP sets, Trubetskoy et al. 2022) — pseudo credible sets belong to `load_pseudo.sh` instead. `PGC_SCZ_2022` rows sit next to the `PGC` pseudo rows under resource `pgc` and cover the same trait code `SCZ`, so filtering on `resource` alone mixes fine-mapped and pseudo results.
 
-   `CREDSET_FILES` in the script is the list of source objects; the relative layout under `credible_sets/` is the same in both deployments' buckets, so `GCS_BUCKET`/`GCS_PREFIX` are the only per-deployment inputs. A resource re-annotated against a newer gnomAD (`most_severe`/`gene_most_severe` re-stamped, every other column unchanged) is written to a sibling prefix (`<release>_gnomad411/`) rather than over the old objects, so a reload can be compared against the previous table and rolled back by pointing the list back. Open Targets is the exception: its re-annotation coincided with release 26.09, whose `trait` is `<readable name>_(<GCST accession>)` while `trait_original` stays the bare accession, so the phenotypes join (below) is untouched. The pre-load `DELETE` names the superseded `dataset` value next to the new one until the old rows are gone from every deployment.
+   `CREDSET_FILES` in the script is the list of source objects; the relative layout under `credible_sets/` is the same in both deployments' buckets, so `GCS_BUCKET`/`GCS_PREFIX` are the only per-deployment inputs. A resource re-annotated against a newer gnomAD (`most_severe`/`gene_most_severe` re-stamped, every other column unchanged) is written to a sibling prefix rather than over the old objects, so a reload can be compared against the previous table and rolled back by pointing the list back. The suffix names the annotation: `<release>_gnomad411/` carried VEP's most severe consequence over every transcript, `<release>_gnomad411_canonical/` (`202609_canonical/` for the two Open Targets resources) carries the canonical-transcript consequence that `genetics-results-munge/scripts/build_gnomad_annotation.py` picks, and is what the list names now. Open Targets is the exception: its re-annotation coincided with release 26.09, whose `trait` is `<readable name>_(<GCST accession>)` while `trait_original` stays the bare accession, so the phenotypes join (below) is untouched. The pre-load `DELETE` names the superseded `dataset` value next to the new one until the old rows are gone from every deployment.
 
 3. **Load pseudo credible sets** (the files in the script's `PSEUDO_CREDSET_FILES`; one pre-load DELETE clears every dataset its `WHERE dataset IN` names, so a dataset dropped from that list keeps its rows until they are removed by hand):
    ```bash
@@ -1387,6 +1390,11 @@ Filters to cis colocalizations (QTL lead variant within ±1 Mb of the gene). Dro
 `scripts/lint-staged.sh` runs ruff over the **staged** Python files from the `pre-commit`
 hook and **fails the commit** when anything is reported. `git commit --no-verify` is the
 bypass. It is the one pre-commit check that blocks; `scripts/check-doc-drift.sh` only warns.
+
+The hook scripts are not this repo's own: `scripts/lint-staged.sh`, `scripts/install-git-hooks.sh`
+and `scripts/doc-drift-lib.sh` are copies genetics-results-suite's `scripts/vendor.py` writes
+(`configs/vendored.yaml` there). Edit them in that repo; only the rules in
+`scripts/check-doc-drift.sh` are maintained here.
 
 - **Staged, not repo-wide.** A finding in a file the commit does not touch never blocks it.
   The other side of that coin is that a pre-existing finding is only ever cleared by

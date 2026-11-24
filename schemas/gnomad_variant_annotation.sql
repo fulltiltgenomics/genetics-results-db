@@ -3,9 +3,10 @@
 -- file the genetics-results-api serves. Kept apart from variant_annotation so that
 -- table's unfiltered queries stay FinnGen-sized.
 --
--- The partition range ends at 26 because the upper bound is exclusive and the suite's
--- chromosome codes run to 25 (X=23, Y=24, M=25); a code outside the range would land in
--- the catch-all partition, where a `chr =` filter still prunes but nothing else does.
+-- The partition range ends at 26, exclusive, so it covers 1..22, X=23 and Y=24. The suite's
+-- mitochondrial code is 26 and would land in the catch-all partition, where a `chr =`
+-- filter still prunes but nothing else does; the gnomAD file this table is loaded from
+-- carries no mitochondrial contig.
 --
 -- Clustered by pos alone: a point lookup (`chr = AND pos =`) and a region scan
 -- (`chr = AND pos BETWEEN`) are the two shapes that must stay cheap on a table this
@@ -48,8 +49,8 @@ CREATE TABLE IF NOT EXISTS `genetics_results.gnomad_variant_annotation`
   AF_nfe FLOAT64 OPTIONS(description="Alternate allele frequency, non-Finnish European"),
   AF_remaining FLOAT64 OPTIONS(description="Alternate allele frequency, remaining individuals"),
   AF_sas FLOAT64 OPTIONS(description="Alternate allele frequency, South Asian"),
-  most_severe STRING OPTIONS(description="Most severe variant consequence (VEP)"),
-  gene_most_severe STRING OPTIONS(description="Gene of the most severe consequence"),
+  most_severe STRING OPTIONS(description="Most severe VEP consequence on a canonical transcript, protein-coding genes first; not VEP's worst over every transcript"),
+  gene_most_severe STRING OPTIONS(description="Gene of the transcript most_severe was taken from: gene symbol, or Ensembl gene ID when the gene has no symbol"),
   consequences ARRAY<STRUCT<
     gene_symbol STRING OPTIONS(description="Gene symbol; NULL when the gene has none"),
     gene_id STRING OPTIONS(description="Ensembl gene ID"),
