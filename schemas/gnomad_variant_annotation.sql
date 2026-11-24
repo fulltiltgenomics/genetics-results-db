@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS `genetics_results.gnomad_variant_annotation`
   AF_nfe FLOAT64 OPTIONS(description="Alternate allele frequency, non-Finnish European"),
   AF_remaining FLOAT64 OPTIONS(description="Alternate allele frequency, remaining individuals"),
   AF_sas FLOAT64 OPTIONS(description="Alternate allele frequency, South Asian"),
-  most_severe STRING OPTIONS(description="Most severe variant consequence (VEP)"),
-  gene_most_severe STRING OPTIONS(description="Gene of the most severe consequence"),
+  most_severe STRING OPTIONS(description="Most severe VEP consequence on a canonical transcript, protein-coding genes first; not VEP's worst over every transcript"),
+  gene_most_severe STRING OPTIONS(description="Gene of the transcript most_severe was taken from: gene symbol, or Ensembl gene ID when the gene has no symbol"),
   consequences ARRAY<STRUCT<
     gene_symbol STRING OPTIONS(description="Gene symbol; NULL when the gene has none"),
     gene_id STRING OPTIONS(description="Ensembl gene ID"),

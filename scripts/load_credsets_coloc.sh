@@ -81,14 +81,14 @@ CREDSET_FILES=(
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_olink/20251024/FinnGen_Olink_1-4_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_olink_5k/FinnGen_Olink_5K_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_somascan/20251024/FinnGen_SomaScan_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/ukb_ppp/20251024_gnomad411/UKB_PPP_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/ukb_ppp/20251024_gnomad411_canonical/UKB_PPP_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_snrnaseq/20251024/FinnGen_snRNAseq_202509_credible_sets.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/finngen_atacseq/20251118/FinnGen_ATACseq_202509_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/eqtl_catalogue/r8_gnomad411/eQTL_Catalogue_R8.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/open_targets/202609/Open_Targets_26.09_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/open_targets_qtl/202609/Open_Targets_QTL_26.09_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/pgc_scz_finemap/2022_gnomad411/PGC_SCZ_2022_credible_sets.tsv.gz"
-  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/nmr_ukbb_est/2026_gnomad411/nmr_ukbb_est_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/eqtl_catalogue/r8_gnomad411_canonical/eQTL_Catalogue_R8.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/open_targets/202609_canonical/Open_Targets_26.09_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/open_targets_qtl/202609_canonical/Open_Targets_QTL_26.09_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/pgc_scz_finemap/2022_gnomad411_canonical/PGC_SCZ_2022_credible_sets.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}credible_sets/nmr_ukbb_est/2026_gnomad411_canonical/nmr_ukbb_est_credible_sets.tsv.gz"
 )
 
 # colocalization files
