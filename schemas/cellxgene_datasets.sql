@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS `genetics_results.cellxgene_datasets`
   title STRING OPTIONS(description="Dataset title"),
   collection_doi STRING OPTIONS(description="Publication DOI of the collection"),
   citation STRING OPTIONS(description="Citation string from the CELLxGENE curation API"),
-  cells_kept INT64 NOT NULL OPTIONS(description="Primary cells aggregated"),
+  cells_kept INT64 NOT NULL OPTIONS(description="Primary cells aggregated, after the per-cell depth filter"),
   n_groups INT64 NOT NULL OPTIONS(description="Cell groups, before suppression"),
   n_genes INT64 NOT NULL OPTIONS(description="Features in the source file"),
   n_genes_measured INT64 NOT NULL OPTIONS(description="Features the dataset measured"),
