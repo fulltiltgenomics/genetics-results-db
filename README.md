@@ -232,7 +232,7 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 - **phenotypes** — trait metadata behind the results tables' phenotype codes, keyed by `(dataset, trait_original)`
 - **datasets** — dataset registry: what each results-view `dataset` value is, its resource, version and credible-set caveats
 - **cellxgene_\*** — CELLxGENE single-cell expression by cell type (daly only): a cross-dataset summary, per-dataset rows, and the release's datasets, groups and measured genes; keys are release-local, so the tables are only ever replaced together. Their views have no `exposed: true` entry in the canonical `datasets.yaml` `tables` block, so `/query`, `/schema` and `/tables/{name}/sample` do not serve them
-- **missense_residue** — possible missense variants mapped to the protein residue they change (daly only), one row per (variant, UniProt accession); the release it was loaded from is in `release`
+- **missense_residue** — possible missense variants mapped to the protein residue they change, one row per (variant, UniProt accession); the release it was loaded from is in `release`
 
 ## License
 

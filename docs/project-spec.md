@@ -656,7 +656,7 @@ image has neither `gcloud` nor `bq`.
 
 ### missense_residue (variant-to-residue map)
 
-The BigQuery mirror of the protein structure release's `variants.tsv.gz` (daly only; the
+The BigQuery mirror of the protein structure release's `variants.tsv.gz` (the
 contract is genetics-results-munge `docs/protein-structure.md`), so a sandbox query can join
 a variant to the residue it changes. Columns, partitioning and clustering:
 `schemas/missense_residue.sql`. What a caller needs to know:

@@ -49,15 +49,17 @@ EXPOSED_VIEWS = {
     "variant_effect_v",
 }
 
+CELLXGENE_VIEWS = {
+    "cellxgene_datasets_v",
+    "cellxgene_expression_v",
+    "cellxgene_groups_v",
+    "cellxgene_measured_genes_v",
+    "cellxgene_summary_v",
+}
+
 GATED_VIEWS = {
-    "daly": {
-        "cellxgene_datasets_v",
-        "cellxgene_expression_v",
-        "cellxgene_groups_v",
-        "cellxgene_measured_genes_v",
-        "cellxgene_summary_v",
-        "missense_residue_v",
-    },
+    "daly": CELLXGENE_VIEWS | {"missense_residue_v"},
+    "finngen": CELLXGENE_VIEWS | {"missense_residue_v"},
 }
 
 DATASETS_YAML = os.path.join(os.path.dirname(__file__), "..", "configs", "datasets.yaml")
