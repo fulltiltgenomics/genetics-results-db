@@ -453,6 +453,32 @@ SCHEMAS = {
     # the direct CSV path is positional, and the two adjacent same-typed pairs below
     # (symbol/symbol_gencode_v19, haploinsufficient/triplosensitive) mean a munge-side
     # column reorder would load silently wrong instead of failing on type.
+    "gnomad_mpc": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("pos", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("ref", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("alt", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("gene", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("transcript_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("mpc", "FLOAT64", mode="REQUIRED"),
+    ],
+    "gnomad_missense_constraint_regions": [
+        bigquery.SchemaField("chr", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("region_start", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("region_end", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("gene", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("gene_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("transcript_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("n_transcript_regions", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("region_obs", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("region_exp", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("region_oe", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("region_oe_chisq", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("region_oe_chisq_p", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("is_high_coverage", "BOOL", mode="REQUIRED"),
+        bigquery.SchemaField("is_outlier_transcript", "BOOL", mode="REQUIRED"),
+    ],
     "dosage_sensitivity": [
         bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("symbol_gencode_v19", "STRING", mode="REQUIRED"),
@@ -512,7 +538,8 @@ SCHEMAS = {
         bigquery.SchemaField("mpc", "FLOAT64"),
         bigquery.SchemaField("alpha_missense", "FLOAT64"),
         bigquery.SchemaField("is_other_splice", "BOOL"),
-        bigquery.SchemaField("de_novo_ac_proband", "INT64", mode="REQUIRED"),
+        bigquery.SchemaField("in_analysis", "BOOL"),
+        bigquery.SchemaField("de_novo_ac_proband", "INT64"),
         bigquery.SchemaField("de_novo_ac_sibling", "INT64"),
         bigquery.SchemaField("transmitted_ac_proband", "INT64"),
         bigquery.SchemaField("untransmitted_ac_proband", "INT64"),

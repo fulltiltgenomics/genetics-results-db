@@ -28,7 +28,7 @@ The loaders run the Python helpers through the interpreter `scripts/lib/common.s
 
 [scripts/load_asc.sh](scripts/load_asc.sh) loads the ASC 2026 autism exome release into `exome_gene_counts`, `exome_gene_bayes_results` and `exome_variant_counts` (deletes its own `dataset = 'ASC2'` rows from each first, then appends; run before `load_phenotypes.sh`)
 
-[scripts/load_schema2_variant_counts.sh](scripts/load_schema2_variant_counts.sh) loads the SCHEMA2 per-variant allele counts into `exome_variant_counts` (deletes its own `dataset = 'SCHEMA2'` rows first, then appends)
+[scripts/load_exome_variant_counts.sh](scripts/load_exome_variant_counts.sh) `<SCHEMA2|BipEx2>` loads that dataset's per-variant allele counts into `exome_variant_counts` (deletes the dataset's own rows first, then appends)
 
 [scripts/load_asm_qtl.sh](scripts/load_asm_qtl.sh) loads ASM-QTL (allele-specific methylation) results
 
@@ -47,6 +47,8 @@ The loaders run the Python helpers through the interpreter `scripts/lib/common.s
 [scripts/load_variant_annotation.sh](scripts/load_variant_annotation.sh) loads FinnGen R14 per-variant functional annotations (truncates `variant_annotation`)
 
 [scripts/load_gnomad_variant_annotation.sh](scripts/load_gnomad_variant_annotation.sh) shards the served gnomAD sites file by chromosome and loads it (replaces `gnomad_variant_annotation` one chromosome at a time; needs a local copy of the file)
+
+[scripts/load_gnomad_missense_constraint.sh](scripts/load_gnomad_missense_constraint.sh) loads the gnomAD v4.1.1 MPC scores and missense constraint regions (truncates `gnomad_mpc` and `gnomad_missense_constraint_regions`, creates both tables and views)
 
 [scripts/load_gene_annotations.sh](scripts/load_gene_annotations.sh) builds and loads the HGNC/GENCODE gene reference table (truncates `gene_annotations`)
 
@@ -215,13 +217,14 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 - **coloc_credsets** — variants in colocalized credible sets
 - **exome_variant_results** — exome variant associations (Genebass, IBD exome)
 - **gene_burden_results** — gene burden test results, unfiltered (Genebass, BipEx2, IBD exome, SCHEMA2, BRaVa)
-- **exome_gene_counts**, **exome_gene_bayes_results**, **exome_variant_counts** — count-based exome studies (ASC 2026 autism release): per-gene counts by variant class x inheritance mode, a per-gene Bayes factor and Bayesian FDR, and per-variant counts; no p-values or effect sizes. `exome_variant_counts` also holds the SCHEMA2 per-variant case/control allele counts and allele numbers
+- **exome_gene_counts**, **exome_gene_bayes_results**, **exome_variant_counts** — count-based exome studies (ASC 2026 autism release): per-gene counts by variant class x inheritance mode, a per-gene Bayes factor and Bayesian FDR, and per-variant counts; no p-values or effect sizes. `exome_variant_counts` also holds the SCHEMA2 and BipEx2 per-variant case/control allele counts and allele numbers, analysed or not (`in_analysis`)
 - **asm_qtl** — allele-specific methylation QTL results (deCODE)
 - **gene_annotations** — whole-universe gene reference table (HGNC + GENCODE, gene-group lineage)
 - **open_chromatin** — atlas of accessible/active chromatin regions by cell type/tissue/condition
 - **variant_effect** — in-silico predicted variant effects on chromatin accessibility (ChromBPNet, FLARE)
 - **mpra** — measured cis-regulatory allelic activity from a reporter assay (Siraj et al.)
 - **variant_annotation** — FinnGen R14 per-variant functional annotations and allele frequencies
+- **gnomad_mpc**, **gnomad_missense_constraint_regions** — gnomAD v4.1.1 MPC scores for every possible missense SNV per transcript, and the per-transcript missense constraint regions with observed and expected counts
 - **gnomad_variant_annotation** — gnomAD per-variant frequencies by genetic ancestry group and VEP annotation (per-gene consequences as a typed array)
 - **peak_to_gene** — Open4Gene peak-to-gene links, joining peak-keyed caQTL results to genes
 - **hla_associations** — classical HLA allele associations (FinnGen R14; keyed by allele, not by variant)

@@ -5,6 +5,7 @@ SELECT
   CASE
     WHEN LOWER(dataset) = 'asc2' THEN 'asc2'
     WHEN LOWER(dataset) = 'schema2' THEN 'schema2'
+    WHEN LOWER(dataset) = 'bipex2' THEN 'bipex2'
     ELSE LOWER(dataset)
   END AS resource
 FROM `genetics_results.exome_variant_counts`;

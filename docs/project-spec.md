@@ -59,6 +59,10 @@ BigQuery Dataset
   │   └── variant_annotation_v (view: adds constant resource='finngen')
   ├── gnomad_variant_annotation (partitioned by chr, clustered by pos)
   │   └── gnomad_variant_annotation_v (view: adds constant resource='gnomad')
+  ├── gnomad_mpc (partitioned by chr, clustered by pos)
+  │   └── gnomad_mpc_v (view: adds variant and constant resource='gnomad')
+  ├── gnomad_missense_constraint_regions (unpartitioned reference table, clustered by gene)
+  │   └── gnomad_missense_constraint_regions_v (view: adds constant resource='gnomad')
   ├── peak_to_gene (unpartitioned link table, clustered by symbol, cell_type, peak_id)
   │   └── peak_to_gene_v (view: adds resource column)
   ├── hla_associations (unpartitioned, clustered by phenotype, gene, allele)
@@ -260,9 +264,9 @@ The count-based exome family: studies whose release carries per-gene and per-var
 
 - `exome_gene_counts` — LONG, one row per (dataset, trait, gene_id, variant_class, inheritance_mode): 7 classes (PTV, Mis2, Mis1, Mis0, synonymous, DEL, DUP) x 3 modes (de_novo, inherited, case_control), with `n_affected` / `n_unaffected` as the pair the mode contrasts (proband/sibling, transmitted/untransmitted, case/control). Every gene has all 21 rows, zeros included. These are the source's "independent" counts and are not sums over `exome_variant_counts`.
 - `exome_gene_bayes_results` — one row per (dataset, trait, gene_id): `bayes_factor`, `fdr`, `qc_flagged`. **Rank on `fdr`**: the Bayesian FDR is the running mean of (1 - PPA) down the BF-ranked list, so it is not a function of `bayes_factor` alone. The four `qc_flagged` genes are kept, flagged.
-- `exome_variant_counts` — one row per (dataset, variant, variant_class), no CNVs: ASC2 gives 20 "other splice" variants a second row, so the variant alone is not a key. ASC2: every variant in the release, chrX and chrY included, with the six source count columns under their source names plus consequence, class, MPC and AlphaMissense annotations. SCHEMA2: only the variants the source marks `in_analysis`, with case and control allele counts **and allele numbers** (`an_case`, `an_ctrl`) and a de novo count. A column a source does not carry is NULL for it, which is why only the columns both carry are NOT NULL; the per-dataset column coverage is stated in `schemas/exome_variant_counts.sql`.
+- `exome_variant_counts` — one row per (dataset, variant, variant_class), no CNVs: ASC2 gives 20 "other splice" variants a second row, so the variant alone is not a key. ASC2: every variant in the release, chrX and chrY included, with the six source count columns under their source names plus consequence, class, MPC and AlphaMissense annotations. SCHEMA2 and BipEx2: every variant of the source file that has a gene, with the source's `in_analysis` flag as a column and case and control allele counts **and allele numbers** (`an_case`, `an_ctrl`); SCHEMA2 also has a de novo count, BipEx2 has none and no transcript. A column a source does not carry is NULL for it, which is why only the columns both carry are NOT NULL; the per-dataset column coverage is stated in `schemas/exome_variant_counts.sql`.
 
-Column lists: `schemas/exome_gene_counts.sql`, `schemas/exome_gene_bayes_results.sql`, `schemas/exome_variant_counts.sql`; the loader's `SCHEMAS` entries in `scripts/load_data.py` must match the column order `genetics-results-munge/scripts/munge_asc.py` and `munge_schema2_variant_counts.py` write, and the null marker is `NA`. All three are partitioned by `chr` and clustered on `dataset, gene, trait` like the burden tables. `scripts/load_asc.sh` deletes `dataset = 'ASC2'` from each and appends, so it is idempotent and independent of the Genebass truncate; it must run before `load_phenotypes.sh` on a profile where the `asc_gene_based` / `asc_exome` registry entries are not listed in `ABSENT_FROM_RESULTS`. `scripts/load_schema2_variant_counts.sh` does the same for `dataset = 'SCHEMA2'` in `exome_variant_counts` alone.
+Column lists: `schemas/exome_gene_counts.sql`, `schemas/exome_gene_bayes_results.sql`, `schemas/exome_variant_counts.sql`; the loader's `SCHEMAS` entries in `scripts/load_data.py` must match the column order `genetics-results-munge/scripts/munge_asc.py` and `munge_exome_variant_counts.py` write, and the null marker is `NA`. All three are partitioned by `chr` and clustered on `dataset, gene, trait` like the burden tables. `scripts/load_asc.sh` deletes `dataset = 'ASC2'` from each and appends, so it is idempotent and independent of the Genebass truncate; it must run before `load_phenotypes.sh` on a profile where the `asc_gene_based` / `asc_exome` registry entries are not listed in `ABSENT_FROM_RESULTS`. `scripts/load_exome_variant_counts.sh <SCHEMA2|BipEx2>` does the same for that dataset's rows in `exome_variant_counts` alone.
 
 ### asm_qtl
 
@@ -561,6 +565,10 @@ Per-variant functional annotations for FinnGen (R14). This is the same data the 
 | EXOME_enrichment_nfe | FLOAT64 | No | Finnish vs non-Finnish European (NFE) enrichment, gnomAD exomes |
 | GENOME_enrichment_nfe | FLOAT64 | No | Finnish vs non-Finnish European (NFE) enrichment, gnomAD genomes |
 | index | INT64 | No | Row index in the source annotation file |
+
+### gnomad_mpc, gnomad_missense_constraint_regions
+
+The gnomAD v4.1.1 regional missense constraint release, GRCh38: `gnomad_mpc` has an MPC score for every possible missense SNV on each transcript it is missense on (so the key is the variant plus `transcript_id`), and `gnomad_missense_constraint_regions` has each transcript's coding span cut into regions with observed and expected missense counts. Both are single-source reference tables whose views append `'gnomad' AS resource`. Column lists and the reasoning: `schemas/gnomad_mpc.sql`, `schemas/gnomad_missense_constraint_regions.sql`. Munged by `genetics-results-munge/scripts/munge_gnomad_missense_constraint.py`, loaded whole by `scripts/load_gnomad_missense_constraint.sh`. The `mpc` column of `exome_variant_counts` is a different, older MPC and is not derived from this table.
 
 ### gnomad_variant_annotation
 
@@ -1011,7 +1019,7 @@ genetics-results-db/
 │   ├── exome_gene_counts_v.sql        # View with resource column
 │   ├── exome_gene_bayes_results.sql   # Count-based exome studies: per-gene Bayes factor and Bayesian FDR (ASC2)
 │   ├── exome_gene_bayes_results_v.sql # View with resource column
-│   ├── exome_variant_counts.sql       # Count-based exome studies: per-variant allele counts by inheritance mode (ASC2, SCHEMA2)
+│   ├── exome_variant_counts.sql       # Count-based exome studies: per-variant allele counts by inheritance mode (ASC2, SCHEMA2, BipEx2)
 │   ├── exome_variant_counts_v.sql     # View with variant and resource columns
 │   ├── asm_qtl.sql                    # deCODE allele-specific methylation QTL table
 │   ├── asm_qtl_v.sql                  # View with variant, maf and resource columns
@@ -1037,6 +1045,10 @@ genetics-results-db/
 │   ├── rcnv_window_associations_v.sql # View with resource column ('rcnv'); no join — a window has no gene
 │   ├── variant_annotation.sql         # FinnGen R14 per-variant functional annotations (stored variant column)
 │   ├── variant_annotation_v.sql       # View with constant resource='finngen'
+│   ├── gnomad_mpc.sql                 # gnomAD v4.1.1 MPC per possible missense SNV and transcript
+│   ├── gnomad_mpc_v.sql               # View with variant and constant resource='gnomad'
+│   ├── gnomad_missense_constraint_regions.sql   # gnomAD v4.1.1 per-transcript missense constraint regions
+│   ├── gnomad_missense_constraint_regions_v.sql # View with constant resource='gnomad'
 │   ├── gnomad_variant_annotation.sql  # gnomAD per-variant frequencies and VEP annotation (stored variant column, consequences as ARRAY<STRUCT>)
 │   ├── gnomad_variant_annotation_v.sql # View with constant resource='gnomad'
 │   ├── cellxgene_{summary,expression,measured_genes,datasets,groups}.sql    # CELLxGENE release tables (replaced together, see "cellxgene_*")
@@ -1060,7 +1072,7 @@ genetics-results-db/
 │   ├── load_gene_burden_extra.sh    # Append additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
 │   ├── load_brava_gene.sh           # Append BRaVa gene burden results, unfiltered per-trait files (deletes dataset='BRaVa' first, no truncate)
 │   ├── load_asc.sh                  # Load the ASC 2026 autism exome release into the three count-based tables (deletes dataset='ASC2' first); run before load_phenotypes.sh
-│   ├── load_schema2_variant_counts.sh # Load the SCHEMA2 per-variant allele counts into exome_variant_counts (deletes dataset='SCHEMA2' first)
+│   ├── load_exome_variant_counts.sh   # Load the SCHEMA2 or BipEx2 per-variant allele counts into exome_variant_counts (deletes that dataset's rows first)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)
@@ -1072,6 +1084,7 @@ genetics-results-db/
 │   ├── load_rcnv_segments.sh      # Load Collins et al. 2022 rCNV segments (WRITE_TRUNCATE) + create rcnv_segments_v view
 │   ├── load_rcnv_window_associations.sh # Load Collins et al. 2022 rCNV sliding-window associations (WRITE_TRUNCATE) + create rcnv_window_associations_v view
 │   ├── load_variant_annotation.sh # Load FinnGen R14 variant annotations (same file the API serves; WRITE_TRUNCATE)
+│   ├── load_gnomad_missense_constraint.sh # Load gnomAD v4.1.1 MPC and missense constraint regions (WRITE_TRUNCATE) + create tables and views
 │   ├── load_gnomad_variant_annotation.sh # Shard the served gnomAD sites file by chromosome, upload, and load (one chromosome replaced per load; rerunnable)
 │   ├── load_cellxgene.sh          # Replace every cellxgene_* table with one CELLxGENE release, in one transaction (run by the munge driver)
 │   ├── load_missense_residue.sh   # Replace missense_residue with one protein structure release's variant-to-residue map, in one transaction (no default dataset)

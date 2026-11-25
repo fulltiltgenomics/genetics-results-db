@@ -57,8 +57,10 @@ CELLXGENE_VIEWS = {
     "cellxgene_summary_v",
 }
 
+GNOMAD_CONSTRAINT_VIEWS = {"gnomad_missense_constraint_regions_v", "gnomad_mpc_v"}
+
 GATED_VIEWS = {
-    "daly": CELLXGENE_VIEWS | {"missense_residue_v"},
+    "daly": CELLXGENE_VIEWS | GNOMAD_CONSTRAINT_VIEWS | {"missense_residue_v"},
     "finngen": CELLXGENE_VIEWS | {"missense_residue_v"},
 }
 

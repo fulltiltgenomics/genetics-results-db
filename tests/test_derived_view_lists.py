@@ -60,6 +60,8 @@ CROSS_CHECK_EXCLUDED = {
     "decode_pqtl_signals_v",
     "dosage_sensitivity_v",
     "gene_annotations_v",
+    "gnomad_missense_constraint_regions_v",
+    "gnomad_mpc_v",
     "gnomad_variant_annotation_v",
     "missense_residue_v",
     "phenotypes_v",
