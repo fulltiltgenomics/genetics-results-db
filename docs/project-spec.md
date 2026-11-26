@@ -234,7 +234,7 @@ Variant-level association results from exome sequencing studies (GeneBASS, IBD e
 
 ### gene_burden_results
 
-Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA2, BRaVa). **Unfiltered** — every gene x annotation x trait combination is here, so a query can ask for one gene in one trait regardless of significance. GeneBASS alone is ~343M rows, loaded from the ~4.5k per-trait files in `exome_results/genebass/gene_burden_per_trait/`; BRaVa likewise comes from per-trait files in `exome_results/brava/gene_burden_per_trait/`, one per phenocode with the ancestry stratum in the name (`AFib|EUR`); the other datasets come from their full `.munged.tsv.gz`. Clustering on `dataset, gene, trait` keeps single-gene lookups cheap despite the size.
+Gene-level burden test results from exome sequencing studies (GeneBASS, BipEx2, IBD exome, SCHEMA1, SCHEMA2, BRaVa). **Unfiltered** — every gene x annotation x trait combination is here, so a query can ask for one gene in one trait regardless of significance. GeneBASS alone is ~343M rows, loaded from the ~4.5k per-trait files in `exome_results/genebass/gene_burden_per_trait/`; BRaVa likewise comes from per-trait files in `exome_results/brava/gene_burden_per_trait/`, one per phenocode with the ancestry stratum in the name (`AFib|EUR`); the other datasets come from their full `.munged.tsv.gz`. Clustering on `dataset, gene, trait` keeps single-gene lookups cheap despite the size.
 
 The tabix API is filtered differently: `/gene_based/{gene}` reads a combined mlog10p_burden > 4 file for GeneBASS (returning every trait of one gene unfiltered would be ~18k rows), while `/gene_based_results_by_phenotype/{resource}/{trait}` serves the same unfiltered per-trait files this table is loaded from. Data files are in `exome_results/` on GCS.
 
@@ -249,7 +249,7 @@ The tabix API is filtered differently: `/gene_based/{gene}` reads a combined mlo
 | gene_end_pos | INT64 | Yes | Gene end position |
 | annotation | STRING | Yes | Annotation category (pLoF, nonsynonymous, etc.) |
 | mlog10p_burden | FLOAT64 | Yes | -log10(p-value) for burden test |
-| beta | FLOAT64 | Yes | Effect size |
+| beta | FLOAT64 | No | Effect size. NULL where the source reports none: the SCHEMA1 meta rows, which are a p-value only, and SCHEMA1 mask rows without a usable odds ratio |
 | se | FLOAT64 | No | Standard error. NULL where the burden test returned no estimate (beta 0, p 1) |
 | total_variants | INT64 | No | Number of variants in gene |
 | total_variants_pheno | INT64 | No | Number of variants in gene for this trait |
@@ -260,11 +260,11 @@ The tabix API is filtered differently: `/gene_based/{gene}` reads a combined mlo
 
 ### exome_gene_counts, exome_gene_bayes_results, exome_variant_counts
 
-The count-based exome family: studies whose release carries per-gene and per-variant **counts** and a Bayesian gene statistic, but no p-value, effect size or allele frequency. First source: the Autism Sequencing Consortium 2026 release (`dataset = 'ASC2'`, one trait `ASD`), in all three tables. `exome_variant_counts` also holds the SCHEMA2 per-variant counts (`dataset = 'SCHEMA2'`, one trait `SCZ`); SCHEMA2 has no rows in the two gene tables. They are separate from `gene_burden_results` / `exome_variant_results` because those require `mlog10p` and `beta`, and deriving either from counts would present a statistic the study never reported — nothing in these three tables is computed on the way in; the munge passes every value through as spelled.
+The count-based exome family: studies whose release carries per-gene and per-variant **counts** and a Bayesian gene statistic, but no p-value, effect size or allele frequency. First source: the Autism Sequencing Consortium 2026 release (`dataset = 'ASC2'`, one trait `ASD`), in all three tables. `exome_variant_counts` also holds the SCHEMA1, SCHEMA2 and BipEx2 per-variant counts (`dataset = 'SCHEMA1'` and `'SCHEMA2'`, trait `SCZ`; `'BipEx2'`, trait `BIP`); they have no rows in the two gene tables. They are separate from `gene_burden_results` / `exome_variant_results` because those require `mlog10p` and `beta`, and deriving either from counts would present a statistic the study never reported — nothing in these three tables is computed on the way in; the munge passes every value through as spelled.
 
 - `exome_gene_counts` — LONG, one row per (dataset, trait, gene_id, variant_class, inheritance_mode): 7 classes (PTV, Mis2, Mis1, Mis0, synonymous, DEL, DUP) x 3 modes (de_novo, inherited, case_control), with `n_affected` / `n_unaffected` as the pair the mode contrasts (proband/sibling, transmitted/untransmitted, case/control). Every gene has all 21 rows, zeros included. These are the source's "independent" counts and are not sums over `exome_variant_counts`.
 - `exome_gene_bayes_results` — one row per (dataset, trait, gene_id): `bayes_factor`, `fdr`, `qc_flagged`. **Rank on `fdr`**: the Bayesian FDR is the running mean of (1 - PPA) down the BF-ranked list, so it is not a function of `bayes_factor` alone. The four `qc_flagged` genes are kept, flagged.
-- `exome_variant_counts` — one row per (dataset, variant, variant_class), no CNVs: ASC2 gives 20 "other splice" variants a second row, so the variant alone is not a key. ASC2: every variant in the release, chrX and chrY included, with the six source count columns under their source names plus consequence, class, MPC and AlphaMissense annotations. SCHEMA2 and BipEx2: every variant of the source file that has a gene, with the source's `in_analysis` flag as a column and case and control allele counts **and allele numbers** (`an_case`, `an_ctrl`); SCHEMA2 also has a de novo count, BipEx2 has none and no transcript. A column a source does not carry is NULL for it, which is why only the columns both carry are NOT NULL; the per-dataset column coverage is stated in `schemas/exome_variant_counts.sql`.
+- `exome_variant_counts` — one row per (dataset, variant, variant_class), no CNVs: ASC2 gives 20 "other splice" variants a second row, so the variant alone is not a key. ASC2: every variant in the release, chrX and chrY included, with the six source count columns under their source names plus consequence, class, MPC and AlphaMissense annotations. SCHEMA2 and BipEx2: every variant of the source file that has a gene, with the source's `in_analysis` flag as a column and case and control allele counts **and allele numbers** (`an_case`, `an_ctrl`); SCHEMA2 also has a de novo count, BipEx2 has none and no transcript. SCHEMA1 (the 2021 SCHEMA release, lifted from GRCh37): the variants of its analysis set that have a consequence, with the columns of SCHEMA2 less the transcript and AlphaMissense; its per-variant statistics are not loaded. A column a source does not carry is NULL for it, which is why only the columns both carry are NOT NULL; the per-dataset column coverage is stated in `schemas/exome_variant_counts.sql`.
 
 Column lists: `schemas/exome_gene_counts.sql`, `schemas/exome_gene_bayes_results.sql`, `schemas/exome_variant_counts.sql`; the loader's `SCHEMAS` entries in `scripts/load_data.py` must match the column order `genetics-results-munge/scripts/munge_asc.py` and `munge_exome_variant_counts.py` write, and the null marker is `NA`. All three are partitioned by `chr` and clustered on `dataset, gene, trait` like the burden tables. `scripts/load_asc.sh` deletes `dataset = 'ASC2'` from each and appends, so it is idempotent and independent of the Genebass truncate; it must run before `load_phenotypes.sh` on a profile where the `asc_gene_based` / `asc_exome` registry entries are not listed in `ABSENT_FROM_RESULTS`. `scripts/load_exome_variant_counts.sh <SCHEMA2|BipEx2>` does the same for that dataset's rows in `exome_variant_counts` alone.
 
@@ -1019,7 +1019,7 @@ genetics-results-db/
 │   ├── exome_gene_counts_v.sql        # View with resource column
 │   ├── exome_gene_bayes_results.sql   # Count-based exome studies: per-gene Bayes factor and Bayesian FDR (ASC2)
 │   ├── exome_gene_bayes_results_v.sql # View with resource column
-│   ├── exome_variant_counts.sql       # Count-based exome studies: per-variant allele counts by inheritance mode (ASC2, SCHEMA2, BipEx2)
+│   ├── exome_variant_counts.sql       # Count-based exome studies: per-variant allele counts by inheritance mode (ASC2, SCHEMA1, SCHEMA2, BipEx2)
 │   ├── exome_variant_counts_v.sql     # View with variant and resource columns
 │   ├── asm_qtl.sql                    # deCODE allele-specific methylation QTL table
 │   ├── asm_qtl_v.sql                  # View with variant, maf and resource columns
@@ -1069,10 +1069,10 @@ genetics-results-db/
 │   ├── load_genebass_variants.sh    # Load GeneBASS exome variant results (truncates table)
 │   ├── load_genebass_gene.sh        # Load GeneBASS gene burden results, unfiltered per-trait files (truncates table)
 │   ├── load_exome_variants_extra.sh # Append additional exome variant results (IBD)
-│   ├── load_gene_burden_extra.sh    # Append additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
+│   ├── load_gene_burden_extra.sh    # Append additional gene burden results, unfiltered (BipEx, IBD, SCHEMA1, SCHEMA2)
 │   ├── load_brava_gene.sh           # Append BRaVa gene burden results, unfiltered per-trait files (deletes dataset='BRaVa' first, no truncate)
 │   ├── load_asc.sh                  # Load the ASC 2026 autism exome release into the three count-based tables (deletes dataset='ASC2' first); run before load_phenotypes.sh
-│   ├── load_exome_variant_counts.sh   # Load the SCHEMA2 or BipEx2 per-variant allele counts into exome_variant_counts (deletes that dataset's rows first)
+│   ├── load_exome_variant_counts.sh   # Load the SCHEMA1, SCHEMA2 or BipEx2 per-variant allele counts into exome_variant_counts (deletes that dataset's rows first)
 │   ├── load_asm_qtl.sh        # Load ASM-QTL (allele-specific methylation) data from deCODE
 │   ├── load_open_chromatin.sh # Load open-chromatin atlas (6 datasets; chr-string→INT64 conversion, truncate+append)
 │   ├── load_peak_to_gene.sh   # Load Open4Gene peak→gene links (chr-string→INT64, cell_type prefix strip, WRITE_TRUNCATE)
@@ -1205,7 +1205,7 @@ genetics-results-db/
    ~343M rows and takes considerably longer than the variant load. The variant load stays
    on the mlog10p > 4 file.
 
-5. **Append additional exome and gene burden results** (IBD, SCHEMA2, BipEx) on top of the GeneBASS load:
+5. **Append additional exome and gene burden results** (IBD, SCHEMA1, SCHEMA2, BipEx) on top of the GeneBASS load:
    ```bash
    ./scripts/load_exome_variants_extra.sh
    ./scripts/load_gene_burden_extra.sh

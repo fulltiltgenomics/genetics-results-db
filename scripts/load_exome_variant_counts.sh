@@ -2,6 +2,7 @@
 # Load one case-control exome study's per-variant allele counts into exome_variant_counts,
 # the table the ASC release's per-variant counts share. The munge
 # (genetics-results-munge/scripts/munge_exome_variant_counts.py) stages
+#   gs://<bucket>/<prefix>exome_results/schema1/SCHEMA1_variant_counts.munged.tsv.gz
 #   gs://<bucket>/<prefix>exome_results/schema/SCHEMA2_variant_counts.munged.tsv.gz
 #   gs://<bucket>/<prefix>exome_results/bipex/BipEx2_variant_counts.munged.tsv.gz
 #
@@ -21,9 +22,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/common.sh"
 
 case "${1:-}" in
+  SCHEMA1) SUBDIR="schema1" ;;
   SCHEMA2) SUBDIR="schema" ;;
   BipEx2)  SUBDIR="bipex" ;;
-  *) echo "usage: $0 <SCHEMA2|BipEx2>" >&2; exit 2 ;;
+  *) echo "usage: $0 <SCHEMA1|SCHEMA2|BipEx2>" >&2; exit 2 ;;
 esac
 EXOME_DATASET="$1"
 

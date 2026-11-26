@@ -176,7 +176,7 @@ SCHEMAS = {
         bigquery.SchemaField("gene_end_pos", "INT64", mode="REQUIRED"),
         bigquery.SchemaField("annotation", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("mlog10p_burden", "FLOAT64", mode="REQUIRED"),
-        bigquery.SchemaField("beta", "FLOAT64", mode="REQUIRED"),
+        bigquery.SchemaField("beta", "FLOAT64"),
         # NULL where the burden test returned no estimate (beta 0, p 1) — only
         # visible now that the unfiltered results are loaded
         bigquery.SchemaField("se", "FLOAT64"),

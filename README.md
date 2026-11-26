@@ -22,13 +22,13 @@ The loaders run the Python helpers through the interpreter `scripts/lib/common.s
 
 [scripts/load_exome_variants_extra.sh](scripts/load_exome_variants_extra.sh) appends additional exome variant results (IBD)
 
-[scripts/load_gene_burden_extra.sh](scripts/load_gene_burden_extra.sh) appends additional gene burden results, unfiltered (BipEx, IBD, SCHEMA2)
+[scripts/load_gene_burden_extra.sh](scripts/load_gene_burden_extra.sh) appends additional gene burden results, unfiltered (BipEx, IBD, SCHEMA1, SCHEMA2)
 
 [scripts/load_brava_gene.sh](scripts/load_brava_gene.sh) appends BRaVa gene burden results, unfiltered, from the per-trait files (deletes its own `dataset = 'BRaVa'` rows first, so it does not depend on the GeneBASS truncate)
 
 [scripts/load_asc.sh](scripts/load_asc.sh) loads the ASC 2026 autism exome release into `exome_gene_counts`, `exome_gene_bayes_results` and `exome_variant_counts` (deletes its own `dataset = 'ASC2'` rows from each first, then appends; run before `load_phenotypes.sh`)
 
-[scripts/load_exome_variant_counts.sh](scripts/load_exome_variant_counts.sh) `<SCHEMA2|BipEx2>` loads that dataset's per-variant allele counts into `exome_variant_counts` (deletes the dataset's own rows first, then appends)
+[scripts/load_exome_variant_counts.sh](scripts/load_exome_variant_counts.sh) `<SCHEMA1|SCHEMA2|BipEx2>` loads that dataset's per-variant allele counts into `exome_variant_counts` (deletes the dataset's own rows first, then appends)
 
 [scripts/load_asm_qtl.sh](scripts/load_asm_qtl.sh) loads ASM-QTL (allele-specific methylation) results
 
@@ -216,8 +216,8 @@ the `_v` name; the base-to-view aliasing applies only to `/schema` and
 - **colocalization** — colocalization analysis results between datasets
 - **coloc_credsets** — variants in colocalized credible sets
 - **exome_variant_results** — exome variant associations (Genebass, IBD exome)
-- **gene_burden_results** — gene burden test results, unfiltered (Genebass, BipEx2, IBD exome, SCHEMA2, BRaVa)
-- **exome_gene_counts**, **exome_gene_bayes_results**, **exome_variant_counts** — count-based exome studies (ASC 2026 autism release): per-gene counts by variant class x inheritance mode, a per-gene Bayes factor and Bayesian FDR, and per-variant counts; no p-values or effect sizes. `exome_variant_counts` also holds the SCHEMA2 and BipEx2 per-variant case/control allele counts and allele numbers, analysed or not (`in_analysis`)
+- **gene_burden_results** — gene burden test results, unfiltered (Genebass, BipEx2, IBD exome, SCHEMA1, SCHEMA2, BRaVa)
+- **exome_gene_counts**, **exome_gene_bayes_results**, **exome_variant_counts** — count-based exome studies (ASC 2026 autism release): per-gene counts by variant class x inheritance mode, a per-gene Bayes factor and Bayesian FDR, and per-variant counts; no p-values or effect sizes. `exome_variant_counts` also holds the SCHEMA1, SCHEMA2 and BipEx2 per-variant case/control allele counts and allele numbers, analysed or not (`in_analysis`)
 - **asm_qtl** — allele-specific methylation QTL results (deCODE)
 - **gene_annotations** — whole-universe gene reference table (HGNC + GENCODE, gene-group lineage)
 - **open_chromatin** — atlas of accessible/active chromatin regions by cell type/tissue/condition

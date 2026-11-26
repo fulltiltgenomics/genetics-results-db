@@ -1,5 +1,5 @@
 #!/bin/bash
-# Append additional gene burden test results (BipEx, IBD, SCHEMA2) to gene_burden_results.
+# Append additional gene burden test results (BipEx, IBD, SCHEMA1, SCHEMA2) to gene_burden_results.
 # Run after load_genebass_gene.sh, which loads Genebass and truncates the table.
 #
 # These are the full unfiltered munged files, matching the unfiltered genebass
@@ -23,6 +23,7 @@ GENE_BURDEN_FILES=(
   "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_CD_gene_results.munged.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_IBD_gene_results.munged.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/ibd/IBD_exome_UC_gene_results.munged.tsv.gz"
+  "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/schema1/SCHEMA1_gene_results.munged.tsv.gz"
   "gs://${GCS_BUCKET}/${GCS_PREFIX}exome_results/schema/SCHEMA2_gene_results.munged.tsv.gz"
 )
 

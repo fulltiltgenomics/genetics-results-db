@@ -4,6 +4,7 @@ SELECT
   CONCAT(chr, ':', pos, ':', ref, ':', alt) AS variant,
   CASE
     WHEN LOWER(dataset) = 'asc2' THEN 'asc2'
+    WHEN LOWER(dataset) = 'schema1' THEN 'schema1'
     WHEN LOWER(dataset) = 'schema2' THEN 'schema2'
     WHEN LOWER(dataset) = 'bipex2' THEN 'bipex2'
     ELSE LOWER(dataset)

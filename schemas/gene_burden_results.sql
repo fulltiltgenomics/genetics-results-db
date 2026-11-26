@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS `genetics_results.gene_burden_results`
   gene_end_pos INT64 NOT NULL OPTIONS(description="Gene end position"),
   annotation STRING NOT NULL OPTIONS(description="Annotation category (pLoF, nonsynonymous, etc.)"),
   mlog10p_burden FLOAT64 NOT NULL OPTIONS(description="-log10(p-value) for burden test"),
-  beta FLOAT64 NOT NULL OPTIONS(description="Effect size"),
+  beta FLOAT64 OPTIONS(description="Effect size. NULL where the source reports none: the SCHEMA1 meta rows, which are a p-value only, and SCHEMA1 mask rows without a usable odds ratio"),
   se FLOAT64 OPTIONS(description="Standard error. NULL where the burden test returned no estimate (beta 0, p 1)"),
   total_variants INT64 OPTIONS(description="Total variants in gene"),
   total_variants_pheno INT64 OPTIONS(description="Total variants in phenotype"),
