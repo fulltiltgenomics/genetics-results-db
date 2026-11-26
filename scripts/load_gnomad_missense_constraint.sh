@@ -10,6 +10,8 @@
 # Run once per profile by setting the env vars, e.g.:
 #   daly:    PROJECT_ID=<daly-project> GCS_BUCKET=daly-genetics-results \
 #            GCS_PREFIX= scripts/load_gnomad_missense_constraint.sh
+#   finngen: PROJECT_ID=<finngen-project> GCS_BUCKET=finngen-commons \
+#            GCS_PREFIX=results_api_data/ scripts/load_gnomad_missense_constraint.sh
 
 set -euo pipefail
 

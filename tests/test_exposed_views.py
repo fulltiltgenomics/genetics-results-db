@@ -36,6 +36,8 @@ EXPOSED_VIEWS = {
     "exome_variant_results_v",
     "gene_annotations_v",
     "gene_burden_results_v",
+    "gnomad_missense_constraint_regions_v",
+    "gnomad_mpc_v",
     "gnomad_variant_annotation_v",
     "hla_associations_v",
     "mpra_v",
@@ -57,10 +59,8 @@ CELLXGENE_VIEWS = {
     "cellxgene_summary_v",
 }
 
-GNOMAD_CONSTRAINT_VIEWS = {"gnomad_missense_constraint_regions_v", "gnomad_mpc_v"}
-
 GATED_VIEWS = {
-    "daly": CELLXGENE_VIEWS | GNOMAD_CONSTRAINT_VIEWS | {"missense_residue_v"},
+    "daly": CELLXGENE_VIEWS | {"missense_residue_v"},
     "finngen": CELLXGENE_VIEWS | {"missense_residue_v"},
 }
 
